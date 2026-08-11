@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+  <category label="Prihlásenie">
+    <setting id="refresh_token" type="text" label="Kaltura refresh token" default=""/>
+    <setting id="udid" type="text" label="UDID zariadenia" default=""/>
+    <setting id="ks" type="text" label="Kaltura session (KS) — počiatočná" default=""/>
+    <setting id="ks_expiry" type="text" label="" default="0" visible="false"/>
+    <setting id="entitled_ids" type="text" label="" default="" visible="false"/>
+    <setting id="entitled_ts" type="text" label="" default="0" visible="false"/>
+  </category>
+  <category label="Prehrávanie">
+    <setting id="client_tag" type="text" label="clientTag" default="9.66.1-PC"/>
+    <setting id="auto_clienttag" type="bool" label="Aktualizovať clientTag automaticky" default="true"/>
+    <setting id="max_bitrate" type="labelenum" label="Max. kvalita" values="Auto|1080p|720p|576p" default="Auto"/>
+  </category>
+  <category label="EPG">
+    <setting id="epg_days_back" type="slider" label="Dní dozadu (archív)" default="7" range="1,1,7" option="int"/>
+    <setting id="epg_days_fwd" type="slider" label="Dní dopredu" default="3" range="1,1,7" option="int"/>
+    <setting id="epg_refresh_h" type="slider" label="Obnova EPG (hodín)" default="12" range="1,1,24" option="int"/>
+    <setting id="export_dir" type="text" label="Export aj do priečinka" default="/storage/emulated/0/Movies"/>
+  </category>
+</settings>
