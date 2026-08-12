@@ -41,13 +41,23 @@ def tick(api):
         return False
 
 
+def sleep_abortable(monitor, seconds, chunk=2):
+    """Caka po malych kuskoch, aby Python stihol prijat ukoncenie skriptu."""
+    waited = 0
+    while waited < seconds:
+        step = min(chunk, seconds - waited)
+        if monitor.waitForAbort(step):
+            return True
+        waited += step
+    return False
+
 def main():
     monitor = xbmc.Monitor()
     api = O2API(Store(), xbmcvfs.translatePath(ADDON.getAddonInfo("profile")))
     log("service štart")
 
     # počkaj, kým Kodi dobehne
-    if monitor.waitForAbort(20):
+    if sleep_abortable(monitor, 20):
         return
 
     profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
@@ -70,7 +80,7 @@ def main():
                     log("export hotový: %d kanálov, %d programov" % (n, p))
                 except Exception as e:
                     log("export zlyhal: %s" % e, True)
-        if monitor.waitForAbort(600):
+        if sleep_abortable(monitor, 600):
             break
     log("service koniec")
 
