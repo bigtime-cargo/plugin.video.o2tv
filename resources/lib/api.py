@@ -68,7 +68,7 @@ class O2API:
         except urllib.error.HTTPError as e:
             raise O2Error("HTTP %s: %s" % (e.code, e.read()[:300]))
 
-    def _kalt(self, action, body):
+    def _kalt(self, action, body, _retry=False):
         tag = self.s.get("client_tag")
         payload = {"clientTag": tag, "apiVersion": API_VER, "partnerId": PARTNER_ID}
         payload.update(body)
@@ -76,6 +76,13 @@ class O2API:
         res = json.loads(self._post(url, payload).decode("utf-8"))
         result = res.get("result", res)
         if isinstance(result, dict) and result.get("error"):
+            if ("500016" in str(result["error"]) and not _retry
+                    and "ottuser/action" not in action):
+                self.st_set(ks_expiry=0)
+                self.refresh()
+                if "ks" in body:
+                    body = dict(body, ks=self.ks())
+                return self._kalt(action, body, True)
             raise O2Error(str(result["error"]))
         return result
 
@@ -154,7 +161,7 @@ class O2API:
         return out
 
     # ---------- prehrávanie ----------
-    def playback_context(self, asset_id, ref_type, asset_type, context):
+    def playback_context(self, asset_id, ref_type, asset_type, context, _retry=False):
         ks = self.ks()
         body = {"clientTag": self.s.get("client_tag"), "apiVersion": API_VER,
                 "partnerId": PARTNER_ID, "ks": ks}
@@ -174,6 +181,11 @@ class O2API:
         result = res.get("result", [])
         pc = result[1] if isinstance(result, list) and len(result) > 1 else result
         if isinstance(pc, dict) and pc.get("error"):
+            if "500016" in str(pc["error"]) and not _retry:
+                self.st_set(ks_expiry=0)
+                self.refresh()
+                return self.playback_context(asset_id, ref_type, asset_type,
+                                             context, True)
             raise O2Error(str(pc["error"]))
         return pc
 
