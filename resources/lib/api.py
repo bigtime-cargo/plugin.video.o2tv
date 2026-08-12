@@ -28,8 +28,9 @@ class O2API:
         import os
         return os.path.join(self.state_dir or ".", "session.json")
 
-    def st_load(self):
-        if self._state is None:
+    def st_load(self, force=False):
+        # vždy čítaj z disku - addon.py a service.py bežia ako dva procesy
+        if force or self._state is None:
             try:
                 with open(self._state_path()) as f:
                     self._state = json.load(f)
@@ -38,11 +39,11 @@ class O2API:
         return self._state
 
     def st_get(self, key, default=""):
-        return self.st_load().get(key, default)
+        return self.st_load(force=True).get(key, default)
 
     def st_set(self, **kw):
         import os, tempfile
-        st = self.st_load()
+        st = self.st_load(force=True)   # zlúč s tým, čo je práve na disku
         st.update(kw)
         self._state = st
         d = self.state_dir or "."
