@@ -200,10 +200,12 @@ class O2API:
 
     def resolve(self, cid, start_ts=None, end_ts=None):
         """Vráti (manifest_url, license_url)."""
-        if start_ts and end_ts and int(end_ts) < int(time.time()) - 10:
+        now = int(time.time())
+        if start_ts and end_ts and int(start_ts) < now - 10:
+            ctx = "CATCHUP" if int(end_ts) < now - 10 else "START_OVER"
             prog = self._find_programme(cid, int(start_ts), int(end_ts))
-            self.last_mode = "CATCHUP cid=%s start=%s prog=%s" % (cid, start_ts, prog)
-            pc = self.playback_context(prog, "epg_internal", "epg", "CATCHUP") if prog \
+            self.last_mode = "%s cid=%s start=%s prog=%s" % (ctx, cid, start_ts, prog)
+            pc = self.playback_context(prog, "epg_internal", "epg", ctx) if prog \
                 else self.playback_context(cid, "media", "media", "PLAYBACK")
         else:
             self.last_mode = "LIVE cid=%s start=%s end=%s" % (cid, start_ts, end_ts)
