@@ -23,7 +23,8 @@ def log(msg, err=False):
 
 
 def tick(api):
-    """Jedno kolo údržby. Vracia True ak session drží."""
+    """Jedno kolo údržby. Vracia True ak session drží.
+    api.ks() sa samo postará o dennú obnovu relácie."""
     try:
         api.ks()
         return True

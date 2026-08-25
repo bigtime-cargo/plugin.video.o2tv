@@ -88,16 +88,30 @@ class O2API:
         return result
 
     # ---------- session ----------
+    # relácia sa obnovuje raz denne, nie až pred vypršaním:
+    # Kaltura zneplatní refresh token spolu s KS, takže čakanie na
+    # koniec platnosti znamená stratu prihlásenia
+    MAX_AGE = 86400
+
     def ks(self):
         now = int(time.time())
         try:
             exp = int(self.st_get("ks_expiry") or 0)
         except Exception:
             exp = 0
+        try:
+            got = int(self.st_get("ks_issued") or 0)
+        except Exception:
+            got = 0
         cur = self.st_get("ks")
-        if cur and exp - now > 300:
+        if cur and exp - now > 300 and now - got < self.MAX_AGE:
             return cur
-        return self.refresh()
+        try:
+            return self.refresh()
+        except O2Error:
+            if cur and exp - now > 300:
+                return cur      # obnova zlyhala, ale stará KS ešte platí
+            raise
 
     def refresh(self):
         # token zo stavu má prednosť; nastavenie je len počiatočný vklad
@@ -115,6 +129,7 @@ class O2API:
         })
         ls = res.get("loginSession", res)
         self.st_set(ks=ls["ks"], ks_expiry=int(ls["expiry"]),
+                    ks_issued=int(time.time()),
                     refresh_token=ls.get("refreshToken") or rt)
         return ls["ks"]
 
@@ -132,6 +147,7 @@ class O2API:
         ls = res["loginSession"]
         self.st_set(udid=udid)
         self.st_set(ks=ls["ks"], ks_expiry=int(ls["expiry"]),
+                    ks_issued=int(time.time()),
                     refresh_token=ls.get("refreshToken") or "")
         return ls
 
