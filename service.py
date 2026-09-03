@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os, sys, time
 
-import xbmc, xbmcaddon, xbmcvfs
+import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 
 ADDON = xbmcaddon.Addon()
 sys.path.insert(0, xbmcvfs.translatePath(
@@ -20,6 +20,30 @@ class Store:
 
 def log(msg, err=False):
     xbmc.log("[o2tv.service] %s" % msg, xbmc.LOGERROR if err else xbmc.LOGINFO)
+
+
+# ks() pri zlyhanej obnove vracia staru KS, takze vypadok obnovy nie je
+# navonok vidiet - az kym KS nevyprsi a s nou nezomrie aj refresh token.
+# Stav starsi nez dva dni preto znamena, ze obnova neprechadza.
+STALE_AFTER = 2 * 86400
+WARN_EVERY = 6 * 3600
+
+
+def check_stale(api, last_warn):
+    """Varuje, ked sa stav dlho neobnovil. Vracia novy cas posledneho varovania."""
+    age = api.state_age()
+    if age < 0 or age <= STALE_AFTER:
+        return last_warn
+    if time.time() - last_warn < WARN_EVERY:
+        return last_warn
+    left = api.ks_remaining()
+    log("obnova relácie neprechádza už %.1f dňa; relácia platí ešte %.1f dňa, "
+        "potom bude treba nové prihlásenie" % (age / 86400.0, max(left, 0) / 86400.0),
+        True)
+    xbmcgui.Dialog().notification(
+        "O2 TV", "Obnova relácie zlyháva %d dní" % int(age / 86400),
+        xbmcgui.NOTIFICATION_WARNING, 8000)
+    return time.time()
 
 
 def tick(api):
@@ -77,8 +101,10 @@ def main():
 
     profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
     last_export = 0
+    last_warn = 0
     while not monitor.abortRequested():
         ok = tick(api)
+        last_warn = check_stale(api, last_warn)
         if ok:
             try:
                 every = int(ADDON.getSetting("epg_refresh_h") or 12) * 3600

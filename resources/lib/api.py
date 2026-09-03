@@ -141,6 +141,24 @@ class O2API:
     # koniec platnosti znamená stratu prihlásenia
     MAX_AGE = 86400
 
+    def state_age(self):
+        """Ako dlho (v sekundach) je ulozeny stav stary, -1 ked stav chyba.
+        Ked je vyssi nez MAX_AGE, denna obnova neprechadza - ks() to
+        maskuje fallbackom na staru KS, takze inak by to nebolo vidiet."""
+        try:
+            got = int(self.st_get("ks_issued") or 0)
+        except Exception:
+            got = 0
+        return int(time.time()) - got if got else -1
+
+    def ks_remaining(self):
+        """Kolko sekund este plati ulozena KS, -1 ked nie je znama."""
+        try:
+            exp = int(self.st_get("ks_expiry") or 0)
+        except Exception:
+            exp = 0
+        return exp - int(time.time()) if exp else -1
+
     def ks(self):
         now = int(time.time())
         try:
