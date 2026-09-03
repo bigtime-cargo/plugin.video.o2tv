@@ -47,6 +47,15 @@ sa nevypĺňa nič.
 5. o2tv.sk nesmie ostať otvorené v prehliadači — webová appka zabije
    doplnkovú reláciu (500016 pár minút po prihlásení).
 6. Po 500016 si doplnok raz sám skúsi obnoviť reláciu a zopakovať volanie.
+7. UDID zo session.json má prednosť pred nastavením v Kodi (api.py, refresh).
+   Nastavenie teda môže ukazovať iné UDID, než sa reálne používa — pri
+   ladení sa pozeraj do session.json, nie do nastavení.
+8. Zariadenie treba zapnúť aspoň raz za 7 dní. Obnova je aktívna operácia,
+   pri vypnutom Kodi ju nemá kto spustiť a token zomrie s KS.
+9. Zlyhanie obnovy nie je hneď vidieť: ks() vráti starú KS a doplnok hrá
+   ďalej, kým KS platí. Preto service od 1.1.7 varuje, keď je stav starší
+   než dva dni, a od 1.1.6 pri štarte overí zapisovateľnosť profilu —
+   tichý pád st_set by znamenal, že sa obnovený token nikam neuloží.
 
 ## Publikovanie — po KAŽDEJ zmene doplnku
 
@@ -54,6 +63,9 @@ Zvýš verziu v addon.xml, inak Kodi aktualizáciu neuvidí.
 
     cd ~/plugin.video.o2tv && git add -A && git commit -m "popis" && git push
     cd ~/kodi-repo && ./build.sh && git add -A && git commit -m "release X.Y.Z" && git push
+
+build.sh balí len súbory sledované gitom — inak by sa do zverejneného
+zipu dostalo aj to, čo je v .gitignore (session.json, o2_auth.json, logy).
 
 Na zariadení: repozitár → pravé tlačidlo → Skontrolovať aktualizácie
 (Kodi má dennú cache) → update → reštart Kodi.
@@ -67,6 +79,13 @@ najprv vyvolať, až potom čítať. Na Androide cez Kodi Logfile Uploader → V
     grep -a "o2tv" ~/.kodi/temp/kodi.log | tail -20
 
 Riadok [o2tv] resolve: ukazuje vetvu (LIVE / CATCHUP / START_OVER).
+Riadok [o2tv.service] zápis stavu overený musí prísť hneď po štarte.
+
+Registrované zariadenia sa dajú vypísať cez householddevice/action/list.
+Kubuntu a telka majú vlastné UDID; JBLW je osirelý pozostatok po starom
+docker o2tv-iptvserveri (ten už nebeží, ostal po ňom ~/o2tv/Data a
+prihlasovací skript s docker compose restart). Telka ho mala zdedený
+kópiou session.json — 3. 9. 2026 dostala vlastné UDID.
 
 ## Ako pracovať v tomto repozitári
 
