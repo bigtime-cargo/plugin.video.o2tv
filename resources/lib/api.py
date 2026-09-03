@@ -82,6 +82,28 @@ class O2API:
             if self._log:
                 self._log("zápis %s zlyhal: %s" % (self._state_path(), e))
 
+    def state_writable(self):
+        """Skusobny zapis rovnakou cestou ako st_set (mkstemp + os.replace).
+        Ked stav nejde ulozit, obnovena relacia sa nikam neulozi a po
+        vyprsani KS zomrie aj refresh token. Vracia (ok, detail)."""
+        import os, tempfile
+        d = self.state_dir or "."
+        probe = os.path.join(d, "session.probe")
+        try:
+            os.makedirs(d, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=d)
+            with os.fdopen(fd, "w") as f:
+                f.write("probe")
+            os.replace(tmp, probe)
+            os.remove(probe)
+            return True, ""
+        except Exception as e:
+            try:
+                os.remove(probe)
+            except Exception:
+                pass
+            return False, str(e)
+
     # ---------- HTTP ----------
     def _post(self, url, body, raw=None, ctype=None):
         data = raw if raw is not None else json.dumps(body).encode("utf-8")

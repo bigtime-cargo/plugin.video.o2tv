@@ -62,6 +62,15 @@ def main():
                 log=lambda m: log(m, True))
     log("service štart")
 
+    # ked sa stav neda zapisat, relacia sa neobnovi a o par dni vyprsi -
+    # nech je to vidiet hned, nie az ked prestane fungovat
+    ok, detail = api.state_writable()
+    if ok:
+        log("zápis stavu overený")
+    else:
+        log("POZOR: stav sa nedá zapísať (%s) — obnova relácie sa neuloží "
+            "a doplnok o pár dní prestane fungovať" % detail, True)
+
     # počkaj, kým Kodi dobehne
     if sleep_abortable(monitor, 20):
         return
