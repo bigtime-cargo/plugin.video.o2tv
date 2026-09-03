@@ -13,7 +13,9 @@ sebestačné — žiadny server, žiadny sidecar.
     resources/lib/api.py      Kaltura klient (login, refresh, kanály, EPG, playback)
     resources/lib/export.py   playlist.m3u + epg.xml pre IPTV Simple
 
-Druhý repozitár: ~/kodi-repo (Kodi repozitár, Pages z /docs).
+Druhý repozitár: ~/kodi-repo (Kodi repozitár, Pages z /docs). Je natrvalo
+pridaný ako pracovný adresár Claude Code cez permissions.additionalDirectories
+v .claude/settings.local.json (necommituje sa — absolútna cesta tohto stroja).
 
 ## Kaltura API
 

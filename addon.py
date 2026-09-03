@@ -95,7 +95,8 @@ def main():
     args = {k[4:] if k.startswith("amp;") else k: v for k, v in raw.items()}
     action = args.get("action", [None])[0]
 
-    api = O2API(Store(), xbmcvfs.translatePath(ADDON.getAddonInfo("profile")))
+    api = O2API(Store(), xbmcvfs.translatePath(ADDON.getAddonInfo("profile")),
+                log=log)
     if not api.st_get("udid") and not ADDON.getSetting("udid"):
         ADDON.setSetting("udid", gen_udid())
 

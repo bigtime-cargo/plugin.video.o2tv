@@ -30,6 +30,10 @@ def tick(api):
         return True
     except O2Error as e:
         log("refresh zlyhal: %s" % e, True)
+        if getattr(e, "code", "") == "500017":
+            # neplatny refresh token - iny clientTag na tom nic nezmeni
+            log("relácia je neobnoviteľná, treba nové prihlásenie", True)
+            return False
         if ADDON.getSetting("auto_clienttag") == "true":
             try:
                 tag = api.update_client_tag()
@@ -54,7 +58,8 @@ def sleep_abortable(monitor, seconds, chunk=2):
 
 def main():
     monitor = xbmc.Monitor()
-    api = O2API(Store(), xbmcvfs.translatePath(ADDON.getAddonInfo("profile")))
+    api = O2API(Store(), xbmcvfs.translatePath(ADDON.getAddonInfo("profile")),
+                log=lambda m: log(m, True))
     log("service štart")
 
     # počkaj, kým Kodi dobehne

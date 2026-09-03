@@ -8,7 +8,26 @@ UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 
 class O2Error(Exception):
-    pass
+    """Chyba Kaltury. code drzi cislo chyby, aby sa dalo rozlisit 500017."""
+
+    def __init__(self, msg, code=""):
+        Exception.__init__(self, msg)
+        self.code = str(code or "")
+
+
+# zrozumitelne hlasky k chybam, na ktore sa da narazit bezne
+ERR_TEXT = {
+    "500017": "Relácia vypršala alebo ju prevzalo iné zariadenie (500017). "
+              "Treba nové prihlásenie.",
+    "500016": "Reláciu zrušilo iné zariadenie alebo web o2tv.sk (500016).",
+    "1015": "Zariadenie je už registrované (1015).",
+}
+
+
+def err_info(err):
+    """Z Kaltura chyby spravi (text, kod)."""
+    code = str(err.get("code", "")) if isinstance(err, dict) else ""
+    return ERR_TEXT.get(code, str(err)), code
 
 
 def gen_udid():
@@ -16,12 +35,14 @@ def gen_udid():
 
 
 class O2API:
-    def __init__(self, store, state_dir=None):
+    def __init__(self, store, state_dir=None, log=None):
         # store = Kodi nastavenia (statické: udid, client_tag, kvalita)
         # state = vlastný JSON súbor (meniace sa: ks, expiry, refresh token)
         self.s = store
         self.state_dir = state_dir
         self._state = None
+        self._log = log
+        self.write_error = ""    # posledne zlyhanie zapisu stavu
 
     # ---------- stav mimo nastavení ----------
     def _state_path(self):
@@ -53,8 +74,13 @@ class O2API:
             with os.fdopen(fd, "w") as f:
                 json.dump(st, f)
             os.replace(tmp, self._state_path())
-        except Exception:
-            pass
+            self.write_error = ""
+        except Exception as e:
+            # tichy pad tu znamena, ze sa neulozi obnoveny refresh token
+            # a relacia po case zomrie na 500017 - musi byt vidiet
+            self.write_error = str(e)
+            if self._log:
+                self._log("zápis %s zlyhal: %s" % (self._state_path(), e))
 
     # ---------- HTTP ----------
     def _post(self, url, body, raw=None, ctype=None):
@@ -84,7 +110,7 @@ class O2API:
                 if "ks" in body:
                     body = dict(body, ks=self.ks())
                 return self._kalt(action, body, True)
-            raise O2Error(str(result["error"]))
+            raise O2Error(*err_info(result["error"]))
         return result
 
     # ---------- session ----------
@@ -203,7 +229,7 @@ class O2API:
                 self.refresh()
                 return self.playback_context(asset_id, ref_type, asset_type,
                                              context, True)
-            raise O2Error(str(pc["error"]))
+            raise O2Error(*err_info(pc["error"]))
         return pc
 
     @staticmethod
