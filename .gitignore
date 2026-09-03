@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 session.json
+o2_auth.json
+*.log
+.claude/settings.local.json
+playlist.m3u
+epg.xml
