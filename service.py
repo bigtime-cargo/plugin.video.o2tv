@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import os, sys, time
+import threading, urllib.request
 
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 
 ADDON = xbmcaddon.Addon()
 sys.path.insert(0, xbmcvfs.translatePath(
     os.path.join(ADDON.getAddonInfo("path"), "resources", "lib")))
-from api import O2API, O2Error   # noqa: E402
+from api import O2API, O2Error, UA   # noqa: E402
 from export import export_all   # noqa: E402
 
 
@@ -70,6 +71,69 @@ def tick(api):
         return False
 
 
+# ---------- udrziavanie CDN relacie pocas pauzy ----------
+# Archiv sa neprehrava z Kaltury, ale z CDN: manifest sa presmeruje na
+# relaciu bpk-token/..., z ktorej idu segmenty. Ta relacia umiera do ~40 s
+# necinnosti. Pri pauze si Kodi nepyta segmenty, takze po odpauznuti dohra
+# buffer a dalsi segment dostane 403 - obraz zamrzne a prehravanie skonci.
+# Pocas pauzy preto manifest pingame my, adresu dava addon.py.
+KEEPALIVE_PROP = "o2tv.keepalive_url"
+PING_EVERY = 20          # bezpecne pod nameranym prahom (30 s este preslo)
+KEEPALIVE_MAX = 45 * 60  # dlhsiu pauzu uz nedrzime, zbytocne by blokovala
+                         # jeden z dvoch subeznych streamov
+
+
+class KeepAlive(threading.Thread):
+    """Vlastne vlakno, aby pingy nezavisely od hlavnej slucky - export EPG
+    ju blokuje na desiatky sekund, co by pauzu rozbilo."""
+
+    def __init__(self, monitor):
+        threading.Thread.__init__(self, daemon=True)
+        self.monitor = monitor
+        self.last_ping = 0
+        self.paused_since = 0
+        self.seen_video = False
+
+    def run(self):
+        while not self.monitor.abortRequested():
+            if self.monitor.waitForAbort(2):
+                break
+            try:
+                self.tick()
+            except Exception as e:
+                log("keep-alive: %s" % e, True)
+
+    def tick(self):
+        win = xbmcgui.Window(10000)
+        url = win.getProperty(KEEPALIVE_PROP)
+        if not url:
+            return
+        playing = xbmc.getCondVisibility("Player.HasVideo")
+        if playing:
+            self.seen_video = True
+        if not xbmc.getCondVisibility("Player.Paused"):
+            self.paused_since = 0
+            # az ked prehravac naozaj bezal - inak by sa adresa zmazala
+            # v tej sekunde medzi resolve a startom prehravania
+            if self.seen_video and not playing:
+                win.clearProperty(KEEPALIVE_PROP)
+                self.seen_video = False
+            return
+        now = time.time()
+        if not self.paused_since:
+            self.paused_since = now
+            log("pauza — držím CDN reláciu nažive")
+        if now - self.paused_since > KEEPALIVE_MAX or now - self.last_ping < PING_EVERY:
+            return
+        self.last_ping = now
+        try:
+            req = urllib.request.Request(url, headers={"user-agent": UA})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                r.read(1)
+        except Exception as e:
+            log("keep-alive zlyhal: %s" % e, True)
+
+
 def sleep_abortable(monitor, seconds, chunk=2):
     """Caka po malych kuskoch, aby Python stihol prijat ukoncenie skriptu."""
     waited = 0
@@ -100,6 +164,7 @@ def main():
         return
 
     profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
+    KeepAlive(monitor).start()
     last_export = 0
     last_warn = 0
     while not monitor.abortRequested():

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import sys, os
-import urllib.parse
+import urllib.parse, urllib.request
 
 import xbmc, xbmcgui, xbmcplugin, xbmcaddon, xbmcvfs
 
@@ -10,7 +10,11 @@ BASE = sys.argv[0] if len(sys.argv) > 0 else "plugin://plugin.video.o2tv/"
 
 sys.path.insert(0, xbmcvfs.translatePath(
     os.path.join(ADDON.getAddonInfo("path"), "resources", "lib")))
-from api import O2API, O2Error, gen_udid   # noqa: E402
+from api import O2API, O2Error, gen_udid, UA   # noqa: E402
+
+# adresa CDN relacie pre keep-alive v service.py (window property, vidia ju
+# oba procesy)
+KEEPALIVE_PROP = "o2tv.keepalive_url"
 
 
 class Store:
@@ -63,6 +67,20 @@ def list_channels(api):
     xbmcplugin.endOfDirectory(HANDLE)
 
 
+def cdn_session(url):
+    """Manifest od Kaltury sa 307-presmeruje na reláciu CDN (bpk-token/...),
+    z ktorej sa ťahajú segmenty. Rozbalíme si ju sami, aby ju service.py
+    vedel počas pauzy udržiavať nažive - inak umrie do ~40 s nečinnosti
+    a po odpauznutí prídu na segmenty 403."""
+    try:
+        req = urllib.request.Request(url, headers={"user-agent": UA})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.geturl()
+    except Exception as e:
+        log("presmerovanie manifestu zlyhalo: %s" % e)
+        return url
+
+
 def play(api, cid, start_ts=None, end_ts=None):
     try:
         manifest, lic = api.resolve(cid, start_ts, end_ts)
@@ -71,6 +89,9 @@ def play(api, cid, start_ts=None, end_ts=None):
         notify("Nedá sa prehrať: %s" % e, True)
         xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
+
+    manifest = cdn_session(manifest)
+    xbmcgui.Window(10000).setProperty(KEEPALIVE_PROP, manifest)
 
     li = xbmcgui.ListItem(path=manifest)
     li.setMimeType("application/dash+xml")

@@ -30,6 +30,26 @@ v .claude/settings.local.json (necommituje sa — absolútna cesta tohto stroja)
   inputstream.adaptive.license_key — žiadny proxy
 - EPG: asset/action/list s linear_media_id, dávky po 5 kanálov, pageSize 500
 
+## CDN relácia — prečo mrzne archív po pauze
+
+Segmenty nejdú z Kaltury, ale z CDN Cetin (Broadpeak). Manifest z
+`sources[].url` sa 307-presmeruje na reláciu `bpk-token/2an@<token>/...`
+a všetky segmenty idú relatívne k nej.
+
+- Tá relácia umiera na nečinnosti. Namerané: odstup 30 s prejde, 40 s už
+  vráti 403; nepretržité sťahovanie beží ľubovoľne dlho.
+- Pri pauze si inputstream.adaptive nepýta segmenty, relácia zomrie a po
+  odpauznutí dohrá buffer, potom 403 (6 pokusov) a Kodi prehrávanie ukončí.
+- Obísť sa to nedá: segmenty žiadané priamo cez `aw-ucdn` host vracajú 403
+  aj s `primaryToken`, redirektor obsluhuje len manifest.
+- Ping manifestu na tokenizovanej URL timeout resetuje — overené, segment
+  po 180 s "pauzy" s pingami každých 20 s vrátil 200. Na tom stojí keep-alive
+  od 1.1.8: `addon.py` rozbalí presmerovanie sám a adresu odovzdá cez window
+  property `o2tv.keepalive_url`, vlákno v `service.py` ju počas pauzy pinguje.
+  Vlastné vlákno preto, že export EPG blokuje hlavnú slučku na desiatky sekúnd.
+- Živému vysielaniu to nepomôže: manifest je dynamický s
+  `timeShiftBufferDepth="PT1M1.440S"`, čiže pauza nad ~1 min nemá čo dohrať.
+
 ## Relácie — pravidlá, na ktorých sa nešetrí
 
 Prihlásenie len raz cez Keycloak (access token z prehliadača), ďalej
