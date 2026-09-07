@@ -99,7 +99,38 @@ spotrebuje skôr, než ho stihneme odovzdať — Keycloak potom vráti
 `invalid_grant: Code not valid`. Dá sa jej to zakázať v DevTools →
 Request conditions → blokovanie `*o2tv.sk*`.
 
+### Telka (Android TV) — cez adb z PC
+
+Prehliadač na telke je nepoužiteľný, tak sa prihlasuje z PC proti jej
+profilu: `tools/login.py` berie cestu z `O2TV_PROFILE`, takže použije
+UDID telky, nie PC. Kopírovaním hotového session.json by sa porušilo
+pravidlo 3 — tu ide o vlastné prihlásenie pre jej UDID.
+
+adb je v `~/platform-tools/adb` (stiahnuté od Googlu, sudo netreba —
+`apt install adb` cez `!` neprejde, sudo nemá terminál na heslo).
+Telka: 192.168.0.129:5555, ladenie ADB v Nastaveniach → Pre vývojárov,
+prvé pripojenie treba na TV potvrdiť dialógom.
+
+    A="$HOME/platform-tools/adb -s 192.168.0.129:5555"
+    D=/storage/emulated/0/Android/data/net.kodinerds.maven.kodi21/files/.kodi
+    T=<pracovný adresár>/telka
+
+    $A connect 192.168.0.129:5555
+    $A shell am force-stop net.kodinerds.maven.kodi21   # nech nezapisuje
+    $A pull $D/userdata/addon_data/plugin.video.o2tv/session.json $T/
+    O2TV_PROFILE=$T python3 tools/login.py --access-token 'eyJ...'
+    $A push $T/session.json $D/userdata/addon_data/plugin.video.o2tv/
+    $A shell monkey -p net.kodinerds.maven.kodi21 -c android.intent.category.LAUNCHER 1
+
+Kodi treba zastaviť ešte pred `pull`: keby medzitým samo obnovilo reláciu,
+push by mu vrátil starý token a zabil ju. Po pushi over `ls -l`, že súbor
+ostal `u0_a95` — inak ho Kodi nebude vedieť prepísať. Log telky je v
+`$D/temp/kodi.log`, dá sa čítať cez `$A shell grep -a o2tv ...`.
+
 Poznámky z 7. 9. 2026:
+- PC aj telka stratili refresh token takmer naraz (5. 9. a 4. 9.), každá
+  s vlastným UDID. 500017 teda nemusí byť zdieľané UDID — vtedy to bolo
+  niečo na strane O2 a nedalo sa tomu predísť
 - prihlásenie zlým číslom vráti 500004 („neevidujeme aktívnu službu") —
   treba číslo služby, ku ktorej je O2 TV zriadená
 - `~/o2tv/o2tv_keycloak_login.py` prihlasuje starý docker: berie UDID
