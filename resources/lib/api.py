@@ -112,7 +112,7 @@ class O2API:
         req.add_header("accept", "*/*")
         req.add_header("user-agent", UA)
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=12) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             raise O2Error("HTTP %s: %s" % (e.code, e.read()[:300]))

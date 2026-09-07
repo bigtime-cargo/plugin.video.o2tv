@@ -4,6 +4,10 @@ import os, time, datetime, tempfile
 PLUGIN = "plugin://plugin.video.o2tv/"
 
 
+class Aborted(Exception):
+    """Kodi sa vypina - export sa prerušil a nic sa nezapisalo."""
+
+
 def xesc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace("'", "&apos;").replace('"', "&quot;"))
@@ -40,7 +44,7 @@ def build_m3u(chans, epg_url=None):
     return "\n".join(out) + "\n"
 
 
-def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None):
+def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None, should_stop=None):
     now = int(time.time())
     start_ts, end_ts = now - days_back * 86400, now + days_fwd * 86400
     id2name = {c["id"]: c["name"] for c in chans}
@@ -54,6 +58,11 @@ def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None):
 
     ids = [c["id"] for c in chans]
     for i in range(0, len(ids), 5):
+        # Export trva desiatky sekund a Kodi pri vypinani caka na vlakno
+        # skriptu. Medzi davkami sa preto pozerame, ci sa nekonci - inak
+        # by vypnutie Kodi drzal az do poslednej davky.
+        if should_stop and should_stop():
+            raise Aborted()
         try:
             progs = api.epg_batch(ids[i:i + 5], start_ts, end_ts)
         except Exception as e:
@@ -76,13 +85,16 @@ def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None):
     return "\n".join(xml)
 
 
-def export_all(api, profile_dir, days_back=7, days_fwd=3, log=None, extra_dir=None):
-    """Vygeneruje playlist a EPG. Vracia (počet kanálov, počet programov)."""
+def export_all(api, profile_dir, days_back=7, days_fwd=3, log=None, extra_dir=None,
+               should_stop=None):
+    """Vygeneruje playlist a EPG. Vracia (počet kanálov, počet programov).
+    Pri ukončovaní Kodi vyhodí Aborted a nezapíše nič — neúplné EPG je
+    horšie než to staré, ktoré na disku už je."""
     chans = api.channels()
     ok = api.entitled_cached([c["id"] for c in chans])
     chans = [c for c in chans if c["id"] in ok]
 
-    xml = build_xmltv(api, chans, days_back, days_fwd, log)
+    xml = build_xmltv(api, chans, days_back, days_fwd, log, should_stop)
 
     targets = [(os.path.join(profile_dir, "playlist.m3u"),
                 os.path.join(profile_dir, "epg.xml"))]

@@ -8,7 +8,7 @@ ADDON = xbmcaddon.Addon()
 sys.path.insert(0, xbmcvfs.translatePath(
     os.path.join(ADDON.getAddonInfo("path"), "resources", "lib")))
 from api import O2API, O2Error, UA   # noqa: E402
-from export import export_all   # noqa: E402
+from export import export_all, Aborted   # noqa: E402
 
 
 class Store:
@@ -128,7 +128,7 @@ class KeepAlive(threading.Thread):
         self.last_ping = now
         try:
             req = urllib.request.Request(url, headers={"user-agent": UA})
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with urllib.request.urlopen(req, timeout=5) as r:
                 r.read(1)
         except Exception as e:
             log("keep-alive zlyhal: %s" % e, True)
@@ -181,9 +181,14 @@ def main():
                     df = int(ADDON.getSetting("epg_days_fwd") or 3)
                     n, p = export_all(api, profile, db, df,
                                       lambda m: log(m, True),
-                                      ADDON.getSetting("export_dir") or None)
+                                      ADDON.getSetting("export_dir") or None,
+                                      should_stop=monitor.abortRequested)
                     last_export = time.time()
                     log("export hotový: %d kanálov, %d programov" % (n, p))
+                except Aborted:
+                    # Kodi sa vypina - export dobehne pri dalsom starte.
+                    log("export prerušený, Kodi sa vypína")
+                    break
                 except Exception as e:
                     log("export zlyhal: %s" % e, True)
         if sleep_abortable(monitor, 600):
