@@ -174,9 +174,15 @@ class O2API:
             return cur
         try:
             return self.refresh()
-        except O2Error:
+        except O2Error as e:
             if cur and exp - now > 300:
-                return cur      # obnova zlyhala, ale stará KS ešte platí
+                # stara KS este plati, takze doplnok hra dalej a vypadok
+                # obnovy by inak nebolo v logu vidiet - az kym nie je neskoro
+                if self._log:
+                    self._log("obnova relácie zlyhala (%s), pokračujem so "
+                              "starou KS, platí ešte %.1f dňa"
+                              % (e, max(exp - now, 0) / 86400.0))
+                return cur
             raise
 
     def refresh(self):
