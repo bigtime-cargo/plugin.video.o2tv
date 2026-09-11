@@ -101,6 +101,13 @@ a heslom vydá token, ktorý vyzerá rovnako, ale chýba mu claim
 namiesto `OTP`) — Kaltura taký token odmietne s 2026 „Activation token
 not found". Overené 11. 9. 2026 na všetkých troch cestách.
 
+Technicky (api.py, `device_start` / `device_poll`): POST na
+`identity.o2.sk/realms/o2/protocol/openid-connect/auth/device` s
+`client_id=o2-xtv-kaltura`, potom sa každých `interval` sekúnd pýta token
+grantom `urn:ietf:params:oauth:grant-type:device_code`, kým nepríde niečo
+iné než `authorization_pending`. Access token ide do `login_with_token`,
+teda do `ottuser/action/login` s `loginType=accessToken` a UDID zo stavu.
+
 ### Access token z prehliadača — záložná cesta
 
 1. prihlás sa na www.o2tv.sk (súkromné okno)
@@ -130,7 +137,10 @@ Request conditions → blokovanie `*o2tv.sk*`.
 Záver: prihlásenie bez človeka nie je možné, OTP je interaktívne. Device
 flow je maximum, čo sa dá — a stačí naň mobil.
 
-### Telka (Android TV) — cez adb z PC
+### Telka (Android TV) — cez adb z PC (od 1.1.11 už len záloha)
+
+Prvá voľba je prihlásenie kódom zariadenia priamo v Kodi na telke. Tento
+postup ostáva pre prípad, že by device flow prestal fungovať.
 
 Prehliadač na telke je nepoužiteľný, tak sa prihlasuje z PC proti jej
 profilu: `tools/login.py` berie cestu z `O2TV_PROFILE`, takže použije
