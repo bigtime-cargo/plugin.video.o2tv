@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 import json, time, secrets, string
-import urllib.request, urllib.error
+import urllib.request, urllib.error, urllib.parse
 
 KALT = "https://3206.frp1.ott.kaltura.com/api_v3/service"
 API_VER, PARTNER_ID, LANG = "5.4.0", 3206, "slk"
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+# Keycloak O2 - prihlasenie kodom zariadenia (ako v TV aplikaciach)
+KC = "https://identity.o2.sk/realms/o2/protocol/openid-connect"
+KC_CLIENT = "o2-xtv-kaltura"
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
 class O2Error(Exception):
@@ -21,6 +26,11 @@ ERR_TEXT = {
               "Treba nové prihlásenie.",
     "500016": "Reláciu zrušilo iné zariadenie alebo web o2tv.sk (500016).",
     "1015": "Zariadenie je už registrované (1015).",
+    # O2 vyda pouzitelny token len pri prihlaseni cislom sluzby (SMS kod);
+    # token z prihlasenia e-mailom a heslom vyzera rovnako, ale nema claim
+    # authenticated_via_subscriber_id a Kaltura ho odmietne prave takto
+    "2026": "O2 token neprijalo (2026). Pri prihlásení treba použiť číslo "
+            "služby a SMS kód, nie e-mail a heslo.",
 }
 
 
@@ -204,6 +214,47 @@ class O2API:
                     ks_issued=int(time.time()),
                     refresh_token=ls.get("refreshToken") or rt)
         return ls["ks"]
+
+    # ---------- prihlásenie kódom zariadenia ----------
+    # Keycloak O2 povoluje device flow, takze prihlasenie ide priamo z Kodi:
+    # doplnok ukaze kod, uzivatel ho potvrdi v prehliadaci na inom zariadeni.
+    def _kc(self, path, form):
+        data = urllib.parse.urlencode(form).encode()
+        req = urllib.request.Request(KC + path, data=data, method="POST")
+        req.add_header("content-type", "application/x-www-form-urlencoded")
+        req.add_header("user-agent", UA)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                return json.loads(e.read().decode("utf-8"))
+            except Exception:
+                raise O2Error("identity.o2.sk vrátilo HTTP %s" % e.code)
+
+    def device_start(self):
+        """Zacne prihlasenie. Vracia dict s user_code, verification_uri_complete,
+        device_code, interval a expires_in."""
+        res = self._kc("/auth/device", {"client_id": KC_CLIENT, "scope": "openid"})
+        if not res.get("device_code"):
+            raise O2Error(res.get("error_description") or res.get("error")
+                          or "O2 nevydalo kód zariadenia")
+        return res
+
+    def device_poll(self, device_code):
+        """Access token, alebo None kym uzivatel kod nepotvrdil."""
+        res = self._kc("/token", {"client_id": KC_CLIENT, "grant_type": DEVICE_GRANT,
+                                  "device_code": device_code})
+        if res.get("access_token"):
+            return res["access_token"]
+        err = res.get("error", "")
+        if err in ("authorization_pending", "slow_down"):
+            return None
+        if err == "expired_token":
+            raise O2Error("Kód vypršal, skús prihlásenie znova.")
+        if err == "access_denied":
+            raise O2Error("Prihlásenie bolo v prehliadači zamietnuté.")
+        raise O2Error(res.get("error_description") or err or "neznáma chyba")
 
     def login_with_token(self, access_token):
         udid = self.st_get("udid") or self.s.get("udid") or gen_udid()

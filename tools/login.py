@@ -6,7 +6,18 @@ nove prihlasenie. Tento skript ho spravi bez Kodi: vysledok ide do
 session.json v addon_data, s UDID, ktore uz doplnok pouziva - nove UDID
 by znamenalo dalsiu registraciu zariadenia.
 
-Dve cesty, obe neinteraktivne (Claude Code ani Kodi nemaju stdin):
+Tri cesty, vsetky neinteraktivne (Claude Code ani Kodi nemaju stdin):
+
+  0) kod zariadenia - najjednoduchsie, netreba DevTools
+
+        python3 tools/login.py --device
+
+     Vypise kod a URL o2.sk/zariadenie; potvrd ho v prehliadaci na mobile.
+     POZOR: prihlas sa cislom sluzby a SMS kodom. Token z prihlasenia
+     e-mailom a heslom vyzera rovnako, ale nema claim
+     authenticated_via_subscriber_id a Kaltura ho odmietne (2026).
+
+     To iste vie doplnok priamo v Kodi: Prihlásiť sa nanovo (kód zariadenia).
 
   1) access token z prehliadaca - spolahliva cesta na tomto stroji
      Prihlas sa na www.o2tv.sk, v DevTools > Network najdi POST na
@@ -89,6 +100,21 @@ def main():
     api = O2API(Store(PROFILE), PROFILE, log=lambda m: print("[log]", m))
     pkce = os.path.join(PROFILE, "pkce.json")
     args = sys.argv[1:]
+
+    if args and args[0] == "--device":
+        import time
+        dev = api.device_start()
+        print("\nOtvor a potvrď (číslom služby a SMS kódom, nie e-mailom):\n")
+        print("    %s" % dev["verification_uri_complete"])
+        print("    kód: %s\n" % dev["user_code"])
+        end = time.time() + int(dev.get("expires_in", 600))
+        while time.time() < end:
+            time.sleep(int(dev.get("interval", 5)))
+            tok = api.device_poll(dev["device_code"])
+            if tok:
+                done(api, api.login_with_token(tok))
+                return
+        sys.exit("[!] Kód vypršal bez potvrdenia.")
 
     if args and args[0] == "--access-token":
         if len(args) < 2:

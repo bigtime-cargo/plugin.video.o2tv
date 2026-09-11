@@ -57,7 +57,11 @@ def tick(api):
         log("refresh zlyhal: %s" % e, True)
         if getattr(e, "code", "") == "500017":
             # neplatny refresh token - iny clientTag na tom nic nezmeni
-            log("relácia je neobnoviteľná, treba nové prihlásenie", True)
+            log("relácia je neobnoviteľná, treba nové prihlásenie "
+                "(doplnok O2 TV → Prihlásiť sa nanovo)", True)
+            xbmcgui.Dialog().notification(
+                "O2 TV", "Relácia vypršala — otvor doplnok a prihlás sa",
+                xbmcgui.NOTIFICATION_WARNING, 10000)
             return False
         if ADDON.getSetting("auto_clienttag") == "true":
             try:

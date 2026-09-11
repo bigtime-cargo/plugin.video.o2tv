@@ -39,13 +39,83 @@ def url_for(**kwargs):
     return BASE + "?" + urllib.parse.urlencode(kwargs)
 
 
+def do_login(api):
+    """Prihlasenie kodom zariadenia. Uzivatel potvrdi kod v prehliadaci na
+    mobile - na telke je to jediny znesitelny sposob a na PC odpada
+    vytahovanie tokenu z DevTools. Vracia True pri uspechu."""
+    import time
+    try:
+        dev = api.device_start()
+    except O2Error as e:
+        notify("Prihlásenie nezačalo: %s" % e, True)
+        return False
+
+    # DialogProgress od Kodi 19 berie jediny text, riadky sa daju len \n
+    head = ("Otvor [B]o2.sk/zariadenie[/B] a zadaj kód:  [B]%s[/B]\n"
+            "Prihlás sa [B]číslom služby[/B] a SMS kódom — e-mail a heslo "
+            "O2 pre doplnok neuzná.\n" % dev["user_code"])
+    dlg = xbmcgui.DialogProgress()
+    dlg.create("O2 TV — prihlásenie", head)
+    step = max(int(dev.get("interval", 5)), 1)
+    total = max(int(dev.get("expires_in", 600)), step)
+    waited, token = 0, None
+    while waited < total:
+        if dlg.iscanceled():
+            dlg.close()
+            return False
+        xbmc.sleep(step * 1000)
+        waited += step
+        dlg.update(int(100 * waited / total),
+                   head + "Čakám na potvrdenie… (zostáva %d s)" % (total - waited))
+        try:
+            token = api.device_poll(dev["device_code"])
+        except O2Error as e:
+            dlg.close()
+            notify("%s" % e, True)
+            return False
+        if token:
+            break
+    dlg.close()
+
+    if not token:
+        notify("Kód vypršal, skús to znova.", True)
+        return False
+    try:
+        ls = api.login_with_token(token)
+    except O2Error as e:
+        notify("%s" % e, True)
+        log("prihlásenie zlyhalo: %s" % e)
+        return False
+    log("prihlásenie kódom zariadenia OK, KS do %s"
+        % time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ls["expiry"]))))
+    notify("Prihlásené. Relácia platí do %s."
+           % time.strftime("%d.%m. %H:%M", time.localtime(int(ls["expiry"]))))
+    return True
+
+
 def list_channels(api):
     try:
         chans = api.channels()
     except O2Error as e:
-        notify("Chyba: %s" % e, True)
-        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
-        return
+        # 500017 = relacia sa uz neda obnovit; ponukni prihlasenie rovno tu,
+        # inak by sa uzivatel k polozke "Prihlásiť sa" nedostal
+        if getattr(e, "code", "") == "500017" and xbmcgui.Dialog().yesno(
+                "O2 TV", "Relácia vypršala a nedá sa obnoviť.\n"
+                         "Prihlásiť sa teraz kódom zariadenia?"):
+            if do_login(api):
+                try:
+                    chans = api.channels()
+                except O2Error as e2:
+                    e = e2
+                    chans = None
+            else:
+                chans = None
+        else:
+            chans = None
+        if chans is None:
+            notify("Chyba: %s" % e, True)
+            xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+            return
 
     ids = [c["id"] for c in chans]
     ok = api.entitled_cached(ids)
@@ -64,6 +134,9 @@ def list_channels(api):
         tag.setTitle(label)
         xbmcplugin.addDirectoryItem(
             HANDLE, url_for(action="play", cid=c["id"]), li, isFolder=False)
+
+    li = xbmcgui.ListItem(label="[ Prihlásiť sa nanovo (kód zariadenia) ]")
+    xbmcplugin.addDirectoryItem(HANDLE, url_for(action="login"), li, isFolder=False)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -126,6 +199,9 @@ def main():
         st = args.get("start_ts", [None])[0]
         et = args.get("end_ts", [None])[0]
         play(api, cid, int(st) if st else None, int(et) if et else None)
+    elif action == "login":
+        do_login(api)
+        xbmc.executebuiltin("Container.Refresh")
     else:
         list_channels(api)
 

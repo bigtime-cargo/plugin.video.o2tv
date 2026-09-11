@@ -64,7 +64,10 @@ sa nevypĺňa nič.
 3. session.json sa na zariadenie kopíruje len raz. Staršia kópia prepíše
    živú reláciu mŕtvou.
 4. Kaltura zneplatní refresh token spolu s KS (~7 dní) → obnova raz denne
-   (MAX_AGE = 86400 v api.py), nie až pred vypršaním.
+   (MAX_AGE = 86400 v api.py), nie až pred vypršaním. `refreshSession`
+   vracia **ten istý** refresh token (nerotuje) a žiadnu jeho expiráciu —
+   merané 11. 9. 2026 dvoma obnovami za sebou. Takže token neprežíva svoju
+   KS a nemá zmysel hľadať chybu v tom, čo doplnok ukladá.
 5. o2tv.sk nesmie ostať otvorené v prehliadači — webová appka zabije
    doplnkovú reláciu (500016 pár minút po prihlásení).
 6. Po 500016 si doplnok raz sám skúsi obnoviť reláciu a zopakovať volanie.
@@ -85,7 +88,20 @@ neobnoviteľný a treba nové prihlásenie: `tools/login.py` zapíše výsledok
 priamo do session.json a použije UDID, ktoré tam už je — nové UDID by
 znamenalo ďalšiu registráciu zariadenia.
 
-Spoľahlivá cesta je access token z prehliadača:
+### Kód zariadenia — od 1.1.11 hlavná cesta
+
+Keycloak O2 povoľuje device flow, takže prihlásenie ide priamo z Kodi
+(doplnok → „Prihlásiť sa nanovo (kód zariadenia)") alebo z terminálu
+`python3 tools/login.py --device`. Doplnok ukáže kód, ten sa potvrdí na
+`o2.sk/zariadenie` z mobilu. Na telke tým odpadá celý adb postup nižšie.
+
+**Prihlasovať sa treba číslom služby a SMS kódom.** Prihlásenie e-mailom
+a heslom vydá token, ktorý vyzerá rovnako, ale chýba mu claim
+`authenticated_via_subscriber_id` (a `authenticated_via` je `PASSWORD`
+namiesto `OTP`) — Kaltura taký token odmietne s 2026 „Activation token
+not found". Overené 11. 9. 2026 na všetkých troch cestách.
+
+### Access token z prehliadača — záložná cesta
 
 1. prihlás sa na www.o2tv.sk (súkromné okno)
 2. DevTools → Network → POST na `openid-connect/token` → z odpovede
@@ -98,6 +114,21 @@ neprejde: redirect končí na `www.o2tv.sk/auth/` a tamojšia appka `?code=`
 spotrebuje skôr, než ho stihneme odovzdať — Keycloak potom vráti
 `invalid_grant: Code not valid`. Dá sa jej to zakázať v DevTools →
 Request conditions → blokovanie `*o2tv.sk*`.
+
+### Čo sa skúšalo a nefunguje (11. 9. 2026, netreba opakovať)
+
+- **offline_access** — `identity.o2.sk` ho má v `scopes_supported`, ale
+  token vráti `not_allowed: Offline tokens not allowed for the user or
+  client`. Trvalý token teda neexistuje.
+- **direct grant (heslo)** — klient `o2-xtv-kaltura` ho povoľuje a token
+  vydá bez SMS, lenže bez `authenticated_via_subscriber_id` → Kaltura 2026.
+  Keycloak tokeny navyše žijú len 300 s, takže ani ako záloha nepomôžu.
+- **naprogramovaný formulárový login** — prihlasovacia stránka Keycloaku
+  je chránená **Cloudflare Turnstile** („Prihlásenie nebolo vyhodnotené
+  ako bezpečné"). Obchádzať sa nebude.
+
+Záver: prihlásenie bez človeka nie je možné, OTP je interaktívne. Device
+flow je maximum, čo sa dá — a stačí naň mobil.
 
 ### Telka (Android TV) — cez adb z PC
 
