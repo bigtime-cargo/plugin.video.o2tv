@@ -200,7 +200,9 @@ class O2API:
         rt = self.st_get("refresh_token") or self.s.get("refresh_token")
         udid = self.st_get("udid") or self.s.get("udid")
         if not rt or not udid:
-            raise O2Error("Chýba refresh token alebo UDID v nastaveniach.")
+            # vlastny kod, aby addon.py vedel ponuknut prihlasenie rovnako
+            # ako pri 500017 - na novom zariadeni sa inak nema od coho odrazit
+            raise O2Error("Zariadenie ešte nie je prihlásené.", "NOSESSION")
         cur = self.st_get("ks") or self.s.get("ks") or ""
         if not cur:
             cur = self._kalt("ottuser/action/anonymousLogin",

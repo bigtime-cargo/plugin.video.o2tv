@@ -93,15 +93,24 @@ def do_login(api):
     return True
 
 
+def login_item():
+    """Polozka prihlasenia. Pridava sa aj vtedy, ked zoznam kanalov zlyhal -
+    inak by na nej uzivatel bez platnej relacie nemal ako skoncit, lebo pod
+    zoznamom kanalov sa k nej nedostane."""
+    li = xbmcgui.ListItem(label="[ Prihlásiť sa nanovo (kód zariadenia) ]")
+    xbmcplugin.addDirectoryItem(HANDLE, url_for(action="login"), li,
+                                isFolder=False)
+
+
 def list_channels(api):
     try:
         chans = api.channels()
     except O2Error as e:
-        # 500017 = relacia sa uz neda obnovit; ponukni prihlasenie rovno tu,
-        # inak by sa uzivatel k polozke "Prihlásiť sa" nedostal
-        if getattr(e, "code", "") == "500017" and xbmcgui.Dialog().yesno(
-                "O2 TV", "Relácia vypršala a nedá sa obnoviť.\n"
-                         "Prihlásiť sa teraz kódom zariadenia?"):
+        # NOSESSION = zariadenie sa este neprihlasilo, 500017 = relacia sa uz
+        # neda obnovit; v oboch pripadoch ponukni prihlasenie rovno tu
+        if getattr(e, "code", "") in ("NOSESSION", "500017") \
+                and xbmcgui.Dialog().yesno(
+                    "O2 TV", "%s\nPrihlásiť sa teraz kódom zariadenia?" % e):
             if do_login(api):
                 try:
                     chans = api.channels()
@@ -114,7 +123,8 @@ def list_channels(api):
             chans = None
         if chans is None:
             notify("Chyba: %s" % e, True)
-            xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+            login_item()
+            xbmcplugin.endOfDirectory(HANDLE)
             return
 
     ids = [c["id"] for c in chans]
@@ -135,8 +145,7 @@ def list_channels(api):
         xbmcplugin.addDirectoryItem(
             HANDLE, url_for(action="play", cid=c["id"]), li, isFolder=False)
 
-    li = xbmcgui.ListItem(label="[ Prihlásiť sa nanovo (kód zariadenia) ]")
-    xbmcplugin.addDirectoryItem(HANDLE, url_for(action="login"), li, isFolder=False)
+    login_item()
     xbmcplugin.endOfDirectory(HANDLE)
 
 
