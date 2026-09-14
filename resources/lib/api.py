@@ -366,7 +366,15 @@ class O2API:
             pc = self.playback_context(cid, "media", "media", "PLAYBACK")
         src = self.pick_source(pc)
         if not src:
-            raise O2Error("Žiadny DASH zdroj.")
+            # Ked Kaltura zdroje nevrati, dovod pise do messages (NOTENTITLED,
+            # limit subeznych streamov, neregistrovane zariadenie). Bez nich je
+            # "Ziadny DASH zdroj" slepa hlaska, z ktorej sa neda nic zistit.
+            msgs = [m for m in (pc or {}).get("messages", []) or []]
+            detail = "; ".join(
+                ("%s %s" % (m.get("code", ""), m.get("message", ""))).strip()
+                for m in msgs) or "Kaltura neposlala ani dôvod."
+            raise O2Error("Žiadny DASH zdroj: %s" % detail,
+                          msgs[0].get("code", "") if msgs else "")
         return src.get("url"), self.widevine_url(pc)
 
     def _find_programme(self, cid, start_ts, end_ts=None):

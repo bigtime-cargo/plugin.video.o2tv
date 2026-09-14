@@ -168,6 +168,8 @@ def play(api, cid, start_ts=None, end_ts=None):
         manifest, lic = api.resolve(cid, start_ts, end_ts)
         log("resolve: %s" % getattr(api, "last_mode", "?"))
     except O2Error as e:
+        # aj neuspech patri do logu - inak po hlasenii nezostane ziadna stopa
+        log("resolve zlyhal (%s): %s" % (getattr(api, "last_mode", "?"), e))
         notify("Nedá sa prehrať: %s" % e, True)
         xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
