@@ -274,7 +274,31 @@ class O2API:
         self.st_set(ks=ls["ks"], ks_expiry=int(ls["expiry"]),
                     ks_issued=int(time.time()),
                     refresh_token=ls.get("refreshToken") or "")
+        # Prihlasenie samo zariadenie do domacnosti nezapise a bez toho
+        # getPlaybackContext vracia 1003 "Device not in household" - kanaly
+        # aj EPG pritom chodia, takze sa to prejavi az pri prehravani.
+        self.register_device()
         return ls
+
+    def register_device(self, name="Kodi"):
+        """Zapise UDID do domacnosti. Uz registrovane zariadenie Kaltura
+        odmietne vlastnou chybou, co nie je dovod padnut."""
+        udid = self.st_get("udid") or self.s.get("udid")
+        if not udid:
+            return False
+        try:
+            self._kalt("householddevice/action/add", {
+                "ks": self.ks(),
+                "device": {"objectType": "KalturaHouseholdDevice",
+                           "udid": udid, "name": name},
+            })
+            if self._log:
+                self._log("zariadenie zaregistrované do domácnosti")
+            return True
+        except O2Error as e:
+            if self._log:
+                self._log("registrácia zariadenia neprešla: %s" % e)
+            return False
 
     # ---------- kanály ----------
     def channels(self):
@@ -326,6 +350,12 @@ class O2API:
             if "500016" in str(pc["error"]) and not _retry:
                 self.st_set(ks_expiry=0)
                 self.refresh()
+                return self.playback_context(asset_id, ref_type, asset_type,
+                                             context, True)
+            # 1003 = zariadenie nie je v domacnosti; sam sa zaregistruj a skus
+            # este raz, nech sa to nemusi riesit novym prihlasenim
+            if "1003" in str(pc["error"]) and not _retry \
+                    and self.register_device():
                 return self.playback_context(asset_id, ref_type, asset_type,
                                              context, True)
             raise O2Error(*err_info(pc["error"]))
