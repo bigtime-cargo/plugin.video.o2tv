@@ -108,6 +108,28 @@ grantom `urn:ietf:params:oauth:grant-type:device_code`, kým nepríde niečo
 iné než `authorization_pending`. Access token ide do `login_with_token`,
 teda do `ottuser/action/login` s `loginType=accessToken` a UDID zo stavu.
 
+### Registrácia zariadenia do domácnosti
+
+Prihlásenie zariadenie do domácnosti **nezapíše**. Bez toho má nové UDID
+platnú reláciu, kanály aj EPG mu chodia, ale `getPlaybackContext` vráti
+`1003 Device not in household` a neprehrá sa nič. Na PC a telke to nebolo
+vidieť — tie registráciu dostali ešte pred doplnkom.
+
+Od 1.1.15 to rieši `register_device()` v api.py: po prihlásení zavolá
+`householddevice/action/add`, a `playback_context` sa pri 1003 raz sám
+zaregistruje a volanie zopakuje (takže zariadenia prihlásené staršou
+verziou sa spravia samy).
+
+**`brandId` je povinné.** Bez neho Kaltura odmietne nové UDID s
+`1002 Device type not allowed`. Používa sa 22 = rodina 5 (PC/MAC), ktorú
+majú všetky registrované zariadenia domácnosti a ktorej zodpovedá aj
+clientTag `...-PC`. Overené 14. 9. 2026: bez brandId 1002, s ním OK.
+Už registrované UDID vráti `1015` — duplicitu kontroluje skôr než typ,
+takže na overení brandId sa existujúce zariadenie použiť nedá.
+
+Zoznam zariadení: `householddevice/action/list` (bez `filter`, ten vráti
+500054). Vypíše udid, brandId, deviceFamilyId a stav.
+
 ### Access token z prehliadača — záložná cesta
 
 1. prihlás sa na www.o2tv.sk (súkromné okno)

@@ -12,6 +12,12 @@ KC_CLIENT = "o2-xtv-kaltura"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
+# Bez brandId odmietne householddevice/add novy udid s 1002 "Device type not
+# allowed". 22 = rodina 5 (PC/MAC), ktoru maju vsetky uz registrovane
+# zariadenia domacnosti a ktorej zodpoveda aj clientTag "...-PC".
+BRAND_ID = 22
+
+
 class O2Error(Exception):
     """Chyba Kaltury. code drzi cislo chyby, aby sa dalo rozlisit 500017."""
 
@@ -290,7 +296,7 @@ class O2API:
             self._kalt("householddevice/action/add", {
                 "ks": self.ks(),
                 "device": {"objectType": "KalturaHouseholdDevice",
-                           "udid": udid, "name": name},
+                           "udid": udid, "name": name, "brandId": BRAND_ID},
             })
             if self._log:
                 self._log("zariadenie zaregistrované do domácnosti")
