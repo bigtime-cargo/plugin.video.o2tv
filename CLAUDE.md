@@ -86,6 +86,14 @@ sa nevypĺňa nič.
    ďalej, kým KS platí. Preto service od 1.1.7 varuje, keď je stav starší
    než dva dni, a od 1.1.6 pri štarte overí zapisovateľnosť profilu —
    tichý pád st_set by znamenal, že sa obnovený token nikam neuloží.
+10. Od 1.1.16 ukáže service pri každom štarte Kodi odpočet „Prihlásenie
+   platí ešte X dní" (`session_notice`). Ráta sa z nového poľa `login_time`
+   v session.json, nie z `ks_expiry` — ten sa každou obnovou posúva, takže
+   by ukazoval stále 7 dní. Počas behu sa toast ozve, len keď ostávajú
+   ≤ 2 dni alebo obnova padá, a nanajvýš raz za 6 hodín. Zariadeniu bez
+   `login_time` sa hodnota raz odhadne z `ks_expiry` (`login_time_est`,
+   toast to prizná slovom „odhad") — odhad je optimistický o toľko, koľko
+   relácia už beží.
 
 ## Prihlásenie — keď už refresh nepomôže (500017)
 
