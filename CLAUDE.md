@@ -158,6 +158,23 @@ spotrebuje skôr, než ho stihneme odovzdať — Keycloak potom vráti
 `invalid_grant: Code not valid`. Dá sa jej to zakázať v DevTools →
 Request conditions → blokovanie `*o2tv.sk*`.
 
+### Čo sa skúšalo a nefunguje (15. 9. 2026, netreba opakovať)
+
+- **udržať Kaltura reláciu cez dlhodobú Keycloak SSO reláciu** — nápad:
+  keby Keycloak refresh token žil dlho, dal by sa ním pravidelne získavať
+  čerstvý access token a Kalture sa prihlasovať nanovo bez človeka.
+  Zmerané 15. 9. 2026 na device-flow tokene klienta `o2-xtv-kaltura`:
+  `refresh_expires_in` je 300 s a `grant_type=refresh_token` ho
+  nepredlžuje — tri volania po sebe (300 → 277 → 206, presne s plynúcim
+  reálnym časom) potvrdili tvrdý strop SSO relácie, nie idle timeout.
+  Webová appka o2tv.sk (JS bundle, 15. 9. 2026) preto Keycloak token
+  používa len ako jednorazový bootstrap do `ottuser/action/login` — od
+  tej chvíle beží všetko na Kaltura KS/refreshToken, nezávisle od
+  Keycloaku. Jej vlastný obnovovací endpoint (`CZ/action/Invoke`,
+  „Refresh Token") je na niečo iné a pre partnera 3206 vracia 404, takže
+  ani ten nie je náhradná cesta. Kaltura väzba KS↔refreshToken (~7 dní,
+  pravidlo 4) je teda skutočný a jediný strop — obídenie neexistuje.
+
 ### Čo sa skúšalo a nefunguje (11. 9. 2026, netreba opakovať)
 
 - **offline_access** — `identity.o2.sk` ho má v `scopes_supported`, ale
