@@ -68,6 +68,12 @@ sa nevypĺňa nič.
    vracia **ten istý** refresh token (nerotuje) a žiadnu jeho expiráciu —
    merané 11. 9. 2026 dvoma obnovami za sebou. Takže token neprežíva svoju
    KS a nemá zmysel hľadať chybu v tom, čo doplnok ukladá.
+   **Obnova životnosť tokenu nepredlžuje.** Token je viazaný na KS z
+   prihlásenia, nie na tú poslednú obnovenú — po ~7 dňoch vráti 500017 aj
+   zariadenie, ktoré sa poctivo obnovovalo každý deň. Nové prihlásenie je
+   teda pravidelná údržba, nie porucha: PC aj telka padli 4.–5. 9., znova
+   13. 9. (obe v ten istý deň, každá s vlastným UDID) a nanovo prihlásené
+   15. 9. 2026. Hľadať príčinu v doplnku netreba — stačí device flow.
 5. o2tv.sk nesmie ostať otvorené v prehliadači — webová appka zabije
    doplnkovú reláciu (500016 pár minút po prihlásení).
 6. Po 500016 si doplnok raz sám skúsi obnoviť reláciu a zopakovať volanie.
