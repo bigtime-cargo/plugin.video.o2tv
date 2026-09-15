@@ -28,23 +28,62 @@ def log(msg, err=False):
 # Stav starsi nez dva dni preto znamena, ze obnova neprechadza.
 STALE_AFTER = 2 * 86400
 WARN_EVERY = 6 * 3600
+LOW_LEFT = 2 * 86400     # odkedy je odpocet naliehavy
 
 
-def check_stale(api, last_warn):
-    """Varuje, ked sa stav dlho neobnovil. Vracia novy cas posledneho varovania."""
+def human(sec):
+    """Zostavajuci cas po slovensky: 1 den, 2-4 dni, 5+ dni."""
+    if sec < 86400:
+        h = int(max(sec, 0) / 3600)
+        if h < 1:
+            return "menej než hodinu"
+        return "%d hodinu" % h if h == 1 else (
+            "%d hodiny" % h if h <= 4 else "%d hodín" % h)
+    d = int(sec / 86400)
+    return "%d deň" % d if d == 1 else (
+        "%d dni" % d if d <= 4 else "%d dní" % d)
+
+
+def session_notice(api, healthy, force=False):
+    """Toast s odpoctom do noveho prihlasenia. Vracia True, ked ho ukazal.
+
+    Bez `force` sa ozve len vtedy, ked je co riesit - pokojny odpocet patri
+    na start Kodi, nie kazdych par hodin do beziaceho filmu.
+
+    Kym obnova prechadza, odpocet sa rata od prihlasenia - ks_expiry sa
+    kazdou obnovou posuva, takze z neho by vzdy vyslo 7 dni. Ked obnova
+    prestane prechadzat, KS zamrzne a jej vyprsanie je uz tvrdy koniec
+    prehravania, cize vtedy je zmysluplnejsie ukazovat ten.
+    """
     age = api.state_age()
-    if age < 0 or age <= STALE_AFTER:
-        return last_warn
-    if time.time() - last_warn < WARN_EVERY:
-        return last_warn
+    if healthy and (age < 0 or age <= STALE_AFTER):
+        left, est = api.session_left()
+        if left < 0:
+            return False
+        low = left <= LOW_LEFT
+        if not (force or low):
+            return False
+        msg = ("Prihlás sa nanovo, platí ešte %s" if low
+               else "Prihlásenie platí ešte %s") % human(left)
+        if est:
+            msg += " (odhad)"
+        log("odpočet: %s" % msg, low)
+        xbmcgui.Dialog().notification(
+            "O2 TV", msg,
+            xbmcgui.NOTIFICATION_WARNING if low else xbmcgui.NOTIFICATION_INFO,
+            8000 if low else 5000)
+        return True
+
     left = api.ks_remaining()
-    log("obnova relácie neprechádza už %.1f dňa; relácia platí ešte %.1f dňa, "
-        "potom bude treba nové prihlásenie" % (age / 86400.0, max(left, 0) / 86400.0),
-        True)
+    if left > 0:
+        msg = "Prihlás sa nanovo — vysielanie funguje ešte %s" % human(left)
+    else:
+        msg = "Relácia vypršala — otvor doplnok a prihlás sa"
+    log("obnova relácie neprechádza (stav starý %.1f dňa); %s"
+        % (max(age, 0) / 86400.0, msg), True)
     xbmcgui.Dialog().notification(
-        "O2 TV", "Obnova relácie zlyháva %d dní" % int(age / 86400),
-        xbmcgui.NOTIFICATION_WARNING, 8000)
-    return time.time()
+        "O2 TV", msg, xbmcgui.NOTIFICATION_WARNING, 10000)
+    return True
 
 
 def tick(api):
@@ -171,9 +210,15 @@ def main():
     KeepAlive(monitor).start()
     last_export = 0
     last_warn = 0
+    first = True
     while not monitor.abortRequested():
         ok = tick(api)
-        last_warn = check_stale(api, last_warn)
+        # pri starte odpocet vzdy, potom uz len ked je naliehavy - a aj
+        # vtedy nanajvys raz za WARN_EVERY, nech toasty nezavadzaju
+        if first or time.time() - last_warn > WARN_EVERY:
+            if session_notice(api, ok, force=first):
+                last_warn = time.time()
+        first = False
         if ok:
             try:
                 every = int(ADDON.getSetting("epg_refresh_h") or 12) * 3600

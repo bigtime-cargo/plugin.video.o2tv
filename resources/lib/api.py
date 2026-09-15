@@ -167,6 +167,36 @@ class O2API:
             got = 0
         return int(time.time()) - got if got else -1
 
+    # Refresh token je viazany na KS z prihlasenia, nie na tu poslednu
+    # obnovenu: po ~7 dnoch vrati 500017 aj zariadenie, ktore sa poctivo
+    # obnovovalo kazdy den (merane 13. 9. 2026 na PC aj telke naraz).
+    # ks_expiry sa kazdou obnovou posuva, takze odpocet sa musi ratat
+    # od prihlasenia - inak by ukazoval stale 7 dni.
+    LOGIN_TTL = 7 * 86400
+
+    def session_left(self):
+        """Kolko sekund zostava do nutneho noveho prihlasenia.
+        Vracia (sekundy, je_to_len_odhad); (-1, False) ked stav chyba."""
+        now = int(time.time())
+        try:
+            lt = int(self.st_get("login_time") or 0)
+        except Exception:
+            lt = 0
+        if lt:
+            return lt + self.LOGIN_TTL - now, bool(self.st_get("login_time_est"))
+        # Zariadenie prihlasene verziou, ktora login_time este nepisala.
+        # Odhadneme ho z ks_expiry a zapiseme, nech dalsie kolo uz pocita
+        # presne; prvy odhad je optimisticky o tolko, kolko uz relacia bezi.
+        exp = self.ks_remaining()
+        if exp < 0:
+            return -1, False
+        lt = now + exp - self.LOGIN_TTL
+        try:
+            self.st_set(login_time=lt, login_time_est=True)
+        except Exception:
+            pass
+        return lt + self.LOGIN_TTL - now, True
+
     def ks_remaining(self):
         """Kolko sekund este plati ulozena KS, -1 ked nie je znama."""
         try:
@@ -279,6 +309,7 @@ class O2API:
         self.st_set(udid=udid)
         self.st_set(ks=ls["ks"], ks_expiry=int(ls["expiry"]),
                     ks_issued=int(time.time()),
+                    login_time=int(time.time()), login_time_est=False,
                     refresh_token=ls.get("refreshToken") or "")
         # Prihlasenie samo zariadenie do domacnosti nezapise a bez toho
         # getPlaybackContext vracia 1003 "Device not in household" - kanaly
