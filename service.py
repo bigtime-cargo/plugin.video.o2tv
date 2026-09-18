@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, sys, time
-import threading, urllib.request
+import threading, urllib.request, urllib.error
 
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 
@@ -121,6 +121,7 @@ def tick(api):
 # buffer a dalsi segment dostane 403 - obraz zamrzne a prehravanie skonci.
 # Pocas pauzy preto manifest pingame my, adresu dava addon.py.
 KEEPALIVE_PROP = "o2tv.keepalive_url"
+RESUME_PROP = "o2tv.play_url"
 PING_EVERY = 20          # bezpecne pod nameranym prahom (30 s este preslo)
 KEEPALIVE_MAX = 45 * 60  # dlhsiu pauzu uz nedrzime, zbytocne by blokovala
                          # jeden z dvoch subeznych streamov
@@ -136,6 +137,7 @@ class KeepAlive(threading.Thread):
         self.last_ping = 0
         self.paused_since = 0
         self.seen_video = False
+        self.dead = False
 
     def run(self):
         while not self.monitor.abortRequested():
@@ -155,26 +157,93 @@ class KeepAlive(threading.Thread):
         if playing:
             self.seen_video = True
         if not xbmc.getCondVisibility("Player.Paused"):
+            was_paused = bool(self.paused_since)
             self.paused_since = 0
+            # relacia umrela uz pocas pauzy: ISA ma v sebe mrtvu adresu,
+            # po odpauznuti dohra buffer a na dalsi segment dostane 403.
+            # Vymenit sa mu neda, tak to pustime znova od toho isteho miesta.
+            if was_paused and self.dead and playing:
+                self.dead = False
+                self.restart()
+                return
             # az ked prehravac naozaj bezal - inak by sa adresa zmazala
             # v tej sekunde medzi resolve a startom prehravania
             if self.seen_video and not playing:
                 win.clearProperty(KEEPALIVE_PROP)
+                win.clearProperty(RESUME_PROP)
                 self.seen_video = False
+                self.dead = False
             return
         now = time.time()
         if not self.paused_since:
             self.paused_since = now
             log("pauza — držím CDN reláciu nažive")
-        if now - self.paused_since > KEEPALIVE_MAX or now - self.last_ping < PING_EVERY:
+        if self.dead:
+            return          # mrtvu relaciu uz neoziveme, netreba na nu klopat
+        if now - self.paused_since > KEEPALIVE_MAX:
+            # prestali sme drzat, takze relacia je tiez prec - nech to vie
+            # aj odpauznutie a nekonci ciernou obrazovkou
+            self.dead = True
+            log("pauza nad %d min — po odpauznutí prehrám znova" % (KEEPALIVE_MAX // 60))
+            return
+        if now - self.last_ping < PING_EVERY:
             return
         self.last_ping = now
         try:
             req = urllib.request.Request(url, headers={"user-agent": UA})
             with urllib.request.urlopen(req, timeout=5) as r:
                 r.read(1)
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                # 403 znamena, ze relacia je definitivne prec - dalsie pingy
+                # by uz len plnili log, ako sa to 18. 9. 2026 aj stalo
+                self.dead = True
+                log("CDN relácia vypršala — po odpauznutí prehrám znova", True)
+                return
+            log("keep-alive zlyhal: %s" % e, True)
         except Exception as e:
             log("keep-alive zlyhal: %s" % e, True)
+
+    def restart(self):
+        """Pusti to iste od tej istej sekundy. Nove volanie si vypyta cerstvy
+        playback context, takze aj cerstvu CDN relaciu."""
+        play_url = xbmcgui.Window(10000).getProperty(RESUME_PROP)
+        if not play_url:
+            log("obnova nemá čo pustiť - chýba adresa", True)
+            return
+        player = xbmc.Player()
+        try:
+            pos = int(player.getTime())
+            old = player.getPlayingFile()
+        except Exception:
+            pos, old = 0, ""
+        log("obnovujem prehrávanie od %d s" % pos)
+        self.seen_video = False
+        player.play(play_url)
+        # cakat treba na naozaj novy stream: stary este chvilu bezi, takze
+        # "hra a ma dlzku" plati hned a seek by sa stratil v tom, co sa
+        # o sekundu zavrie (overene 18. 9. 2026). Novy stream spozname
+        # po zmene adresy, a ak by ostala rovnaka, tak po navrate na zaciatok.
+        for _ in range(30):
+            if self.monitor.waitForAbort(1):
+                return
+            try:
+                if not (player.isPlayingVideo() and player.getTotalTime() > 0):
+                    continue
+                if player.getPlayingFile() != old or player.getTime() < pos - 5:
+                    break
+            except Exception:
+                continue
+        else:
+            log("obnova sa nerozbehla do 30 s", True)
+            return
+        if pos <= 0:
+            return
+        self.monitor.waitForAbort(1)
+        try:
+            player.seekTime(pos)
+        except Exception as e:
+            log("seek po obnove zlyhal: %s" % e, True)
 
 
 def sleep_abortable(monitor, seconds, chunk=2):

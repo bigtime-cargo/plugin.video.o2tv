@@ -15,6 +15,9 @@ from api import O2API, O2Error, gen_udid, UA   # noqa: E402
 # adresa CDN relacie pre keep-alive v service.py (window property, vidia ju
 # oba procesy)
 KEEPALIVE_PROP = "o2tv.keepalive_url"
+# to iste volanie, aby ho service.py vedel zopakovat, ked CDN relacia
+# umrie uz pocas pauzy a odpauznutie by skoncilo ciernou obrazovkou
+RESUME_PROP = "o2tv.play_url"
 
 
 class Store:
@@ -175,7 +178,14 @@ def play(api, cid, start_ts=None, end_ts=None):
         return
 
     manifest = cdn_session(manifest)
-    xbmcgui.Window(10000).setProperty(KEEPALIVE_PROP, manifest)
+    win = xbmcgui.Window(10000)
+    win.setProperty(KEEPALIVE_PROP, manifest)
+    resume = {"action": "play", "cid": cid}
+    if start_ts:
+        resume["start_ts"] = start_ts
+    if end_ts:
+        resume["end_ts"] = end_ts
+    win.setProperty(RESUME_PROP, url_for(**resume))
 
     li = xbmcgui.ListItem(path=manifest)
     li.setMimeType("application/dash+xml")
