@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, sys, time
+import json, os, sys, time
 import threading, urllib.request, urllib.error
 
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
@@ -246,6 +246,107 @@ class KeepAlive(threading.Thread):
             log("seek po obnove zlyhal: %s" % e, True)
 
 
+# ---------- pokracovanie na dalsi program ----------
+# Program pusteny z EPG, kym este bezal, dostane od CDN live manifest. Po jeho
+# skonceni CDN manifest prepne na static, ale ISA 21 na to nereaguje - dalej
+# ho kazde 2 s obnovuje a caka na segmenty, ktore uz nepridu. Prehravanie
+# preto nikdy neskonci, Kodi nedostane koniec suboru a jeho "prehrat dalsi
+# program" (pvrplayback.autoplaynextprogramme) sa nespusti. Obraz stoji
+# 3 s pred koncom (overene 14. 10. 2026: 54:57 z 55:00 este 25 min po konci).
+# Zaseknutie na konci preto spoznavame sami a dalsi program pustame cez EPG.
+END_MARGIN = 15     # s do konca, odkedy sa stojaci obraz povazuje za koniec
+END_STALL = 10      # s bez pohybu pozicie
+
+
+def rpc(method, **params):
+    req = {"jsonrpc": "2.0", "id": 1, "method": method}
+    if params:
+        req["params"] = params
+    res = json.loads(xbmc.executeJSONRPC(json.dumps(req)))
+    if "error" in res:
+        raise RuntimeError("%s: %s" % (method, res["error"]))
+    return res["result"]
+
+
+class EndWatch(threading.Thread):
+
+    def __init__(self, monitor):
+        threading.Thread.__init__(self, daemon=True)
+        self.monitor = monitor
+        self.last_pos = -1
+        self.still_since = 0
+        self.done = None     # broadcastid, pre ktory sme uz zasiahli
+
+    def run(self):
+        while not self.monitor.abortRequested():
+            if self.monitor.waitForAbort(2):
+                break
+            try:
+                self.tick()
+            except Exception as e:
+                log("koniec programu: %s" % e, True)
+                self.still_since = 0
+
+    def tick(self):
+        if not (xbmcgui.Window(10000).getProperty(KEEPALIVE_PROP)
+                and xbmc.getCondVisibility("PVR.IsPlayingEpgTag")
+                and not xbmc.getCondVisibility("Player.Paused")):
+            self.still_since = 0
+            return
+        player = xbmc.Player()
+        pos, total = player.getTime(), player.getTotalTime()
+        if total <= 0 or total - pos > END_MARGIN or abs(pos - self.last_pos) > 0.5:
+            self.last_pos = pos
+            self.still_since = 0
+            return
+        now = time.time()
+        if not self.still_since:
+            self.still_since = now
+        if now - self.still_since < END_STALL:
+            return
+        bid = rpc("Player.GetItem", playerid=1)["item"].get("id")
+        if not bid or bid == self.done:
+            return
+        self.done = bid
+        self.play_next(bid)
+
+    def play_next(self, bid):
+        cur = rpc("PVR.GetBroadcastDetails", broadcastid=bid,
+                  properties=["title", "endtime"])["broadcastdetails"]
+        utcnow = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        if cur["endtime"] > utcnow:
+            # program este bezi a stojime na zivom okraji - to nie je koniec
+            self.done = None
+            self.still_since = 0
+            return
+        broadcasts = self.channel_broadcasts(bid)
+        if broadcasts is None:
+            log("koniec programu: nenašiel som kanál k %s" % cur["title"], True)
+            return
+        later = [b for b in broadcasts if b["starttime"] >= cur["endtime"]]
+        nxt = min(later, key=lambda b: b["starttime"]) if later else None
+        if not nxt or nxt["starttime"] > utcnow:
+            log("koniec programu %s, ďalší ešte nezačal — zastavujem" % cur["title"])
+            xbmc.Player().stop()
+            return
+        log("koniec programu %s, púšťam %s" % (cur["title"], nxt["label"]))
+        rpc("Player.Open", item={"broadcastid": nxt["broadcastid"]})
+
+    @staticmethod
+    def channel_broadcasts(bid):
+        # vysielanie samo kanal neprezradi, tak ho hladame podla mena
+        # a overime, ze program naozaj patri do jeho EPG
+        name = xbmc.getInfoLabel("VideoPlayer.ChannelName")
+        for ch in rpc("PVR.GetChannels", channelgroupid="alltv")["channels"]:
+            if ch["label"] != name:
+                continue
+            bc = rpc("PVR.GetBroadcasts", channelid=ch["channelid"],
+                     properties=["starttime", "endtime"])["broadcasts"]
+            if any(b["broadcastid"] == bid for b in bc):
+                return bc
+        return None
+
+
 def sleep_abortable(monitor, seconds, chunk=2):
     """Caka po malych kuskoch, aby Python stihol prijat ukoncenie skriptu."""
     waited = 0
@@ -277,6 +378,7 @@ def main():
 
     profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
     KeepAlive(monitor).start()
+    EndWatch(monitor).start()
     last_export = 0
     last_warn = 0
     first = True

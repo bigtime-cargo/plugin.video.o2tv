@@ -51,6 +51,29 @@ a všetky segmenty idú relatívne k nej.
 - Živému vysielaniu to nepomôže: manifest je dynamický s
   `timeShiftBufferDepth="PT1M1.440S"`, čiže pauza nad ~1 min nemá čo dohrať.
 
+## Archív bežiaceho programu a pokračovanie na ďalší (1.1.18)
+
+Zmerané 14. 10. 2026 na telke (ISA 21.5.25):
+
+- Program pustený z EPG, kým ešte beží, dá CDN ako **dynamic** manifest
+  (`timeShiftBufferDepth` = od začiatku programu po teraz). Po konci
+  programu ten istý manifest prepne na `static` s plnou dĺžkou — ale ISA
+  zmenu typu ignoruje, ďalej ho každé 2 s obnovuje a koniec nenahlási.
+  Obraz stál na 54:57 z 55:00 ešte 25 min po konci, takže Kodi
+  `pvrplayback.autoplaynextprogramme` (zapnuté) sa nikdy nespustilo.
+  Rieši to `EndWatch` v `service.py`: stojaca pozícia ≤ 15 s pred koncom
+  10 s, program podľa EPG skončil → `Player.Open {"broadcastid": ďalší}`.
+- Bez `inputstream.adaptive.play_timeshift_buffer` ISA dynamic manifest
+  púšťa od živého okraja, nie od začiatku programu. Doplnok ho nastavuje
+  pri každom archíve (`start_ts`); static manifest ho ignoruje.
+- IPTV Simple pre bežiaci program posiela `end_ts` = **teraz − 5 min**
+  a `start_ts` = začiatok − 5 min. Program, ktorý začal pred < 5 min, tak
+  celý leží mimo rozsahu a hľadanie cez stred rozsahu vrátilo
+  predchádzajúci program. `_find_programme` preto berie program so
+  začiatkom najbližšie k `start_ts + BEGIN_BUFFER`.
+- Názov `CATCHUP`/`START_OVER` v logu `resolve:` o type manifestu nič
+  nehovorí — kvôli tomu `end_ts` je bežiaci program skoro vždy `CATCHUP`.
+
 ## Relácie — pravidlá, na ktorých sa nešetrí
 
 Prihlásenie len raz cez Keycloak (access token z prehliadača), ďalej

@@ -16,6 +16,9 @@ DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 # allowed". 22 = rodina 5 (PC/MAC), ktoru maju vsetky uz registrovane
 # zariadenia domacnosti a ktorej zodpoveda aj clientTag "...-PC".
 BRAND_ID = 22
+# o kolko IPTV Simple posuva zaciatok archivu pred program
+# (pvr.iptvsimple catchupWatchEpgBeginBufferMins, predvolene 5 min)
+BEGIN_BUFFER = 5 * 60
 
 
 class O2Error(Exception):
@@ -445,10 +448,16 @@ class O2API:
         return src.get("url"), self.widevine_url(pc)
 
     def _find_programme(self, cid, start_ts, end_ts=None):
-        # IPTV Simple pridáva buffery, preto hľadáme program cez stred rozsahu
-        mid = int((start_ts + end_ts) / 2) if end_ts else int(start_ts)
-        ksql = ("(and linear_media_id:'%s' start_date <= '%d' end_date >= '%d' "
-                "asset_type='epg' auto_fill=true)" % (cid, mid, mid))
+        # IPTV Simple posúva začiatok o buffer dopredu (catchupWatchEpgBeginBufferMins,
+        # 5 min) a koniec o 15 min dozadu - ale programu, ktorý ešte beží, dá
+        # ako koniec "teraz mínus 5 min". Pri programe, ktorý začal pred menej
+        # než 5 min, tak celý rozsah leží v predchádzajúcom programe a stred
+        # rozsahu pustil ten (14. 10. 2026: Top Star pustil Noviny). Berieme
+        # program so začiatkom najbližšie k start + buffer.
+        want = start_ts + BEGIN_BUFFER
+        end_ts = max(end_ts or start_ts, want)
+        ksql = ("(and linear_media_id:'%s' start_date <= '%d' end_date > '%d' "
+                "asset_type='epg' auto_fill=true)" % (cid, end_ts, start_ts))
         res = self._kalt("asset/action/list", {
             "ks": self.ks(), "language": LANG,
             "filter": {"objectType": "KalturaSearchAssetFilter",
@@ -457,10 +466,9 @@ class O2API:
                       "pageSize": 50, "pageIndex": 1},
         })
         objs = res.get("objects", []) or []
-        for o in objs:
-            if int(o.get("startDate", 0)) <= mid <= int(o.get("endDate", 0)):
-                return o["id"]
-        return objs[0]["id"] if objs else None
+        if not objs:
+            return None
+        return min(objs, key=lambda o: abs(int(o.get("startDate", 0)) - want))["id"]
 
     # ---------- EPG ----------
     def epg_batch(self, channel_ids, start_ts, end_ts):

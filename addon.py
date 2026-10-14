@@ -192,6 +192,12 @@ def play(api, cid, start_ts=None, end_ts=None):
     li.setContentLookup(False)
     li.setProperty("inputstream", "inputstream.adaptive")
     li.setProperty("inputstream.adaptive.manifest_type", "mpd")
+    if start_ts:
+        # program, ktory este bezi, dava CDN ako live manifest (dynamic) a ISA
+        # by ho pustil od ziveho okraja - pri pokracovani na dalsi program by
+        # tak preskocil, co uz odvysielali. Timeshift buffer zacina presne
+        # zaciatkom programu. Odvysielany program je static, tam sa to ignoruje.
+        li.setProperty("inputstream.adaptive.play_timeshift_buffer", "true")
     if lic:
         li.setProperty("inputstream.adaptive.license_type", "com.widevine.alpha")
         li.setProperty("inputstream.adaptive.license_key",
