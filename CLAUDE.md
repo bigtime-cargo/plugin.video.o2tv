@@ -66,6 +66,22 @@ Zmerané 14. 10. 2026 na telke (ISA 21.5.25):
 - Bez `inputstream.adaptive.play_timeshift_buffer` ISA dynamic manifest
   púšťa od živého okraja, nie od začiatku programu. Doplnok ho nastavuje
   pri každom archíve (`start_ts`); static manifest ho ignoruje.
+- Obnova po mŕtvej CDN relácii (pauza nad 45 min alebo 403) musí program
+  z EPG pustiť znova cez EPG (`Player.Stop` + `Player.Open {"broadcastid"}`),
+  nie cez `o2tv.play_url`. S adresou doplnku Kodi zabudne, že hrá program
+  z EPG, a po riadnom EOF nepustí ďalší. Stalo sa 15. 10. 2026, opravené
+  v 1.1.19 (`KeepAlive.reopen_epg`).
+- Po `Player.Stop` nestačí čakať na `isPlaying()` = false: prehrávač to
+  hlási hneď na začiatku `CloseFile`, PVR program „pustí z hlavy“ až po jeho
+  dobehnutí. Dovtedy `Player.Open {"broadcastid"}` vráti `OK` a nič nespraví
+  (`CPVRGUIActionsPlayback::PlayEpgTag` pri `IsPlayingEpgTag` len prepne na
+  celú obrazovku). 19. 10. 2026 sa zatváranie pri zamrznutom CDN ťahalo 4 s
+  a obnova skončila v menu (`obnova sa nerozbehla do 30 s`). Od 1.1.20 sa
+  čaká aj na `PVR.IsPlayingEpgTag` = false a po `Open` sa overí, že niečo
+  hrá (2 pokusy, potom adresa doplnku). Keď sa starý program nezavrie ani
+  do 15 s, `Open` sa nevolá vôbec a ide rovno adresa doplnku — inak by
+  kontrola `isPlaying()` po `Open` zachytila ešte ten starý stream a
+  obnova by sa tvárila ako úspešná.
 - IPTV Simple pre bežiaci program posiela `end_ts` = **teraz − 5 min**
   a `start_ts` = začiatok − 5 min. Program, ktorý začal pred < 5 min, tak
   celý leží mimo rozsahu a hľadanie cez stred rozsahu vrátilo

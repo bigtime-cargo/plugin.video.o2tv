@@ -217,9 +217,16 @@ class KeepAlive(threading.Thread):
             old = player.getPlayingFile()
         except Exception:
             pos, old = 0, ""
-        log("obnovujem prehrávanie od %d s" % pos)
+        bid = None
+        if xbmc.getCondVisibility("PVR.IsPlayingEpgTag"):
+            try:
+                bid = rpc("Player.GetItem", playerid=1)["item"].get("id")
+            except Exception as e:
+                log("obnova: program z EPG som nezistil (%s)" % e, True)
+        log("obnovujem prehrávanie od %d s%s" % (pos, " cez EPG" if bid else ""))
         self.seen_video = False
-        player.play(play_url)
+        if not (bid and self.reopen_epg(player, bid)):
+            player.play(play_url)
         # cakat treba na naozaj novy stream: stary este chvilu bezi, takze
         # "hra a ma dlzku" plati hned a seek by sa stratil v tom, co sa
         # o sekundu zavrie (overene 18. 9. 2026). Novy stream spozname
@@ -244,6 +251,49 @@ class KeepAlive(threading.Thread):
             player.seekTime(pos)
         except Exception as e:
             log("seek po obnove zlyhal: %s" % e, True)
+
+    def reopen_epg(self, player, bid):
+        """Program pusteny z EPG treba obnovit znova cez EPG. S adresou doplnku
+        by Kodi zabudol, ze ide o program z EPG, a na konci by nepustil dalsi
+        (pvrplayback.autoplaynextprogramme; stalo sa 15. 10. 2026 po pauze
+        nad 45 min). Ten isty program, kym este hra, Kodi znova neotvori,
+        preto najprv stop.
+
+        Na isPlaying() sa cakat neda: prehravac hlasi koniec hned na zaciatku
+        CloseFile, ale PVR program pusti z hlavy az po jeho dobehnuti. Kym ho
+        ma za hrajuci, Player.Open vrati OK a neurobi nic (PlayEpgTag len
+        prepne na celu obrazovku). 19. 10. 2026 sa zatvaranie pri zamrznutom
+        CDN tiahlo 4 s a obnova skoncila v menu. Preto cakame aj na PVR
+        a po Open overime, ze sa naozaj nieco otvorilo.
+
+        Ked sa stary stream nezavrie ani do 15 s, Open by nic nespravil
+        a kontrola isPlaying() by sa chytila toho stareho - vtedy rovno
+        adresa doplnku, ta ho nahradi aj pocas zatvarania."""
+        player.stop()
+        for _ in range(30):
+            if self.monitor.waitForAbort(0.5):
+                return True
+            if not (player.isPlaying()
+                    or xbmc.getCondVisibility("PVR.IsPlayingEpgTag")):
+                break
+        else:
+            log("obnova cez EPG: starý program sa nezavrel do 15 s, "
+                "púšťam adresu doplnku", True)
+            return False
+        for attempt in (1, 2):
+            try:
+                rpc("Player.Open", item={"broadcastid": bid})
+            except Exception as e:
+                log("obnova cez EPG zlyhala (%s), púšťam adresu doplnku" % e, True)
+                return False
+            for _ in range(10):
+                if self.monitor.waitForAbort(0.5):
+                    return True
+                if player.isPlaying():
+                    return True
+            log("obnova cez EPG: Player.Open nič nepustil (pokus %d)" % attempt, True)
+        log("púšťam adresu doplnku", True)
+        return False
 
 
 # ---------- pokracovanie na dalsi program ----------
