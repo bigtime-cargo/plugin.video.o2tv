@@ -344,9 +344,19 @@ na túto cestu, auto_login zlyhá s hláškou a treba ručné prihlásenie.
 **Čo je overené:** `tools/auto_approve.py` (29. 10. 2026, ostrý O2): dva POST-y
 (Pokračovať, Povoliť), token endpoint vydal token s `authenticated_via=OTP`
 a `authenticated_via_subscriber_id`; cookie je kĺzavé (server ho pri každom
-použití obnoví, ~154 dní). Neoverené na ostro: celý reťazec
-`auto_login` → `login_with_token` v Kodi (offline testy:
-`python3 -m unittest tools.test_sso -v`).
+použití obnoví, ~154 dní). Celý reťazec `auto_login` → `login_with_token`
+overený naostro v Kodi 29. 10. 2026 na telke (pokus → úspech za ~3 s) aj na PC
+(offline testy: `python3 -m unittest tools.test_sso -v`).
+
+**Okamžité prihlásenie z doplnku (1.2.1):** služba kontroluje reláciu len raz za
+10 min, takže pri 500017 medzi kolami by používateľ videl chybu, hoci cookie
+existuje (stalo sa 29. 10. na PC hneď po importe). `addon.py` preto pri 500017 /
+NOSESSION v `play()` a v zozname kanálov zavolá `auto_relogin()` (progress
+„Obnovujem prihlásenie…", potom jedno opakovanie) a rovnako po importe cookie,
+keď do konca ostáva ≤ 2 dni. Súbehu so službou bráni window property
+`o2tv.auto_busy` (čas začiatku, zabudnutý zámok po 150 s); úspešné prihlásenie
+z doplnku nastaví `o2tv.auto_done`, podľa čoho služba zahodí príznak mŕtveho
+refreshu a nepokúša sa znova.
 
 **Bezpečnosť:** SSO cookie je kľúč k CELÉMU O2 účtu (nielen k O2 TV). Nikdy
 do gitu (`sso.json`, `o2-sso.json` sú v .gitignore), do logov, výnimiek,

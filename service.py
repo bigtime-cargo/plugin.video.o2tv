@@ -454,6 +454,11 @@ class EndWatch(threading.Thread):
 # (api.auto_login). Poistky proti zahlteniu servera O2:
 SSO_FILE = "sso.json"
 SSO_PROP = "o2tv.sso_changed"    # nastavi addon.py po importe/zmazani cookie
+# addon.py (prehravanie, zoznam kanalov, import) sa prihlasi hned a oznami to
+# tymito window property; AUTO_BUSY = prave bezi pokus (cas jeho zaciatku)
+AUTO_BUSY = "o2tv.auto_busy"
+AUTO_DONE = "o2tv.auto_done"
+AUTO_BUSY_MAX = 150              # s, potom sa zamok povazuje za zabudnuty
 AUTO_LEFT = 2 * 86400            # skusat, ked do konca prihlasenia ostava <= 2 dni
 AUTO_FAIL_WAIT = 3600            # po neuspechu najblizsi pokus o 1 h
 AUTO_OK_WAIT = 6 * 3600          # po uspechu nie skor ako o 6 h
@@ -469,12 +474,22 @@ class AutoLogin:
         self.dead = False        # refresh vratil 500017 (nastavuje tick)
         self.failed_now = False  # posledne run() sa pokusilo a zlyhalo
         self.seen_prop = xbmcgui.Window(10000).getProperty(SSO_PROP)
+        self.seen_done = xbmcgui.Window(10000).getProperty(AUTO_DONE)
 
     def can_try(self):
         """Smie sa teraz pokusit (subor existuje, poistky to dovoluju)?"""
         self._check_prop()
         return (not self.paused and time.time() >= self.next_try
-                and os.path.isfile(self.path))
+                and os.path.isfile(self.path) and not self._busy())
+
+    @staticmethod
+    def _busy():
+        """Iny pokus (addon.py) prave bezi - druhy naraz by len zataazil O2."""
+        try:
+            v = float(xbmcgui.Window(10000).getProperty(AUTO_BUSY) or 0)
+        except ValueError:
+            return False
+        return time.time() - v < AUTO_BUSY_MAX
 
     def _check_prop(self):
         # novy import cookie = cisty stol (pauza po 3 neuspechoch by inak
@@ -484,6 +499,15 @@ class AutoLogin:
             self.seen_prop = cur
             self.fails, self.paused, self.next_try = 0, False, 0
             log("automatické prihlásenie: cookie sa zmenilo, poistky vynulované")
+        # relaciu medzitym obnovil addon.py (prehravanie/import): mrtvy refresh
+        # uz neplati a dalsi pokus nie je potrebny skor nez po AUTO_OK_WAIT
+        done = xbmcgui.Window(10000).getProperty(AUTO_DONE)
+        if done != self.seen_done:
+            self.seen_done = done
+            self.dead, self.fails, self.paused = False, 0, False
+            self.api.refresh_dead = False
+            self.next_try = time.time() + AUTO_OK_WAIT
+            log("automatické prihlásenie: relácia už bola obnovená z doplnku")
 
     def run(self):
         """Skusi prihlasenie, ak je potrebne a smie sa. True = prihlaseny."""
@@ -497,6 +521,8 @@ class AutoLogin:
             "do konca prihlásenia ostáva %s" % human(left)
         log("automatické prihlásenie: pokus %d/%d (%s)"
             % (self.fails + 1, AUTO_MAX_FAILS, why))
+        win = xbmcgui.Window(10000)
+        win.setProperty(AUTO_BUSY, str(time.time()))
         try:
             self.api.auto_login(self.path, sleep=self.monitor.waitForAbort,
                                 should_stop=self.monitor.abortRequested)
@@ -509,6 +535,8 @@ class AutoLogin:
             # sprava vynimky sa nelogue - mohla by obsahovat cokolvek
             self._failed("neočakávaná chyba %s" % type(e).__name__)
             return False
+        finally:
+            win.clearProperty(AUTO_BUSY)
         self.fails, self.dead = 0, False
         self.next_try = time.time() + AUTO_OK_WAIT
         log("automatické prihlásenie: úspech")

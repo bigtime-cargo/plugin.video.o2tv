@@ -107,9 +107,18 @@ def login_item():
                                 isFolder=False)
 
 
+def channels_with_relogin(api):
+    try:
+        return api.channels()
+    except O2Error as e:
+        if getattr(e, "code", "") in ("NOSESSION", "500017") and auto_relogin(api):
+            return api.channels()
+        raise
+
+
 def list_channels(api):
     try:
-        chans = api.channels()
+        chans = channels_with_relogin(api)
     except O2Error as e:
         # NOSESSION = zariadenie sa este neprihlasilo, 500017 = relacia sa uz
         # neda obnovit; v oboch pripadoch ponukni prihlasenie rovno tu
@@ -170,7 +179,14 @@ def cdn_session(url):
 
 def play(api, cid, start_ts=None, end_ts=None):
     try:
-        manifest, lic = api.resolve(cid, start_ts, end_ts)
+        try:
+            manifest, lic = api.resolve(cid, start_ts, end_ts)
+        except O2Error as e:
+            # mrtva relacia + ulozene SSO cookie: prihlas sa hned a skus znova
+            if getattr(e, "code", "") not in ("500017", "NOSESSION") \
+                    or not auto_relogin(api):
+                raise
+            manifest, lic = api.resolve(cid, start_ts, end_ts)
         log("resolve: %s" % getattr(api, "last_mode", "?"))
     except O2Error as e:
         # aj neuspech patri do logu - inak po hlasenii nezostane ziadna stopa
@@ -219,11 +235,59 @@ def play(api, cid, start_ts=None, end_ts=None):
 SSO_FILE = "sso.json"
 IMPORT_NAME = "o2-sso.json"
 SSO_PROP = "o2tv.sso_changed"    # service.py podla neho vynuluje poistky
+# window property s casom, odkedy bezi automaticke prihlasenie (service alebo
+# tento skript) - druhy pokus naraz by len zbytocne zataazil server O2
+AUTO_BUSY = "o2tv.auto_busy"
+AUTO_DONE = "o2tv.auto_done"     # cas posledneho uspesneho prihlasenia odtialto
+AUTO_BUSY_MAX = 150              # s, potom sa zamok povazuje za zabudnuty
+AUTO_LEFT = 2 * 86400            # ako v service.py
 
 
 def sso_path():
     return os.path.join(xbmcvfs.translatePath(ADDON.getAddonInfo("profile")),
                         SSO_FILE)
+
+
+def auto_busy(win):
+    try:
+        return time.time() - float(win.getProperty(AUTO_BUSY) or 0) < AUTO_BUSY_MAX
+    except ValueError:
+        return False
+
+
+def auto_relogin(api):
+    """Relacia je mrtva (500017) alebo chyba (NOSESSION): ak je v profile
+    sso.json, prihlasi sa HNED tu, bez cakania na dalsie kolo sluzby (to
+    chodi raz za 10 min a v tej dobe by uzivatel videl chybu, hoci cookie
+    uz existuje). True = relacia je obnovena."""
+    if not os.path.isfile(sso_path()):
+        return False
+    win = xbmcgui.Window(10000)
+    waited = 0
+    while auto_busy(win) and waited < 60:     # prave bezi pokus zo sluzby
+        xbmc.sleep(1000)
+        waited += 1
+    if waited:
+        try:
+            api.ks()
+            return True
+        except O2Error:
+            pass
+    win.setProperty(AUTO_BUSY, str(time.time()))
+    dlg = xbmcgui.DialogProgressBG()
+    dlg.create("O2 TV", "Obnovujem prihlásenie…")
+    try:
+        api.auto_login(sso_path())
+        win.setProperty(AUTO_DONE, str(time.time()))   # service: uz netreba
+        notify("Prihlásenie obnovené automaticky")
+        return True
+    except O2Error as e:
+        # sprava O2Error je bez tajomstiev (cookie ani tokeny v nej nie su)
+        log("automatické prihlásenie zlyhalo (%s): %s" % (e.code or "-", e))
+        return False
+    finally:
+        win.clearProperty(AUTO_BUSY)
+        dlg.close()
 
 
 def sso_candidates():
@@ -255,9 +319,10 @@ def remove_file(path):
         return bool(xbmcvfs.delete(path))
 
 
-def import_sso():
+def import_sso(api=None):
     """Nacita o2-sso.json, overi, ulozi do profilu ako sso.json a ZDROJOVY
-    SUBOR ZMAZE - nesmie lezat v Stiahnutych. Hodnoty cookie sa nelogu."""
+    SUBOR ZMAZE - nesmie lezat v Stiahnutych. Hodnoty cookie sa nelogu.
+    Ked relacia konci (<= 2 dni) alebo je mrtva, prihlasi sa hned."""
     src = next((p for p in sso_candidates() if os.path.isfile(p)), None)
     if not src:
         if not xbmcgui.Dialog().yesno(
@@ -294,6 +359,10 @@ def import_sso():
     else:
         notify("SSO cookie uložené, ale súbor %s sa nepodarilo zmazať — "
                "zmaž ho ručne!" % IMPORT_NAME, True)
+    if api is not None:
+        left, _ = api.session_left()
+        if left <= AUTO_LEFT:
+            auto_relogin(api)
 
 
 def delete_sso():
@@ -334,7 +403,7 @@ def main():
         do_login(api)
         xbmc.executebuiltin("Container.Refresh")
     elif action == "import_sso":
-        import_sso()
+        import_sso(api)
     elif action == "delete_sso":
         delete_sso()
     else:

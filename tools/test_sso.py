@@ -690,6 +690,174 @@ class ServiceAutoTests(unittest.TestCase):
         self.assertTrue(self.svc.tick(self.api, self.auto))
         self.assertTrue(self.auto.dead)
 
+    def test_busy_attempt_from_addon_blocks_service(self):
+        self._file()
+        self.auto.dead = True
+        self.props[self.svc.AUTO_BUSY] = str(self.now[0] - 10)      # bezi 10 s
+        self.assertFalse(self.auto.run())
+        self.api.auto_login.assert_not_called()
+        self.props[self.svc.AUTO_BUSY] = str(self.now[0] - 1000)    # zabudnuty zamok
+        self.assertTrue(self.auto.run())
+
+    def test_service_sets_and_clears_busy_around_attempt(self):
+        self._file()
+        self.auto.dead = True
+        seen = []
+        self.api.auto_login.side_effect = lambda *a, **k: seen.append(
+            self.props.get(self.svc.AUTO_BUSY))
+        self.assertTrue(self.auto.run())
+        self.assertTrue(seen[0])                       # pocas pokusu zamok je
+        self.gui.Window.return_value.clearProperty.assert_called_with(self.svc.AUTO_BUSY)
+
+    def test_done_from_addon_clears_dead_state(self):
+        self._file()
+        self.auto.dead, self.auto.fails = True, 2
+        self.api.refresh_dead = True
+        self.props[self.svc.AUTO_DONE] = "123"         # addon sa uz prihlasil
+        self.assertFalse(self.auto.run())
+        self.api.auto_login.assert_not_called()
+        self.assertEqual((self.auto.dead, self.auto.fails), (False, 0))
+        self.assertFalse(self.api.refresh_dead)
+
+
+class AddonStubs:
+    """Nacita addon.py s falosnymi modulmi Kodi (profil v docasnom adresari)."""
+
+    @staticmethod
+    def load(profile):
+        import importlib.util
+        props = {}
+        win = mock.Mock()
+        win.getProperty.side_effect = lambda k: props.get(k, "")
+        win.setProperty.side_effect = lambda k, v: props.__setitem__(k, v)
+        win.clearProperty.side_effect = lambda k: props.pop(k, None)
+        gui = mock.MagicMock()
+        gui.Window.return_value = win
+        addon = mock.MagicMock()
+        addon.getAddonInfo.side_effect = lambda k: {
+            "path": os.path.dirname(HERE), "profile": profile}[k]
+        xaddon = mock.MagicMock()
+        xaddon.Addon.return_value = addon
+        vfs = mock.MagicMock()
+        vfs.translatePath.side_effect = lambda p: p
+        xbmc = mock.MagicMock()
+        plugin = mock.MagicMock()
+        mods = {"xbmc": xbmc, "xbmcaddon": xaddon, "xbmcgui": gui,
+                "xbmcvfs": vfs, "xbmcplugin": plugin}
+        with mock.patch.dict(sys.modules, mods), \
+                mock.patch.object(sys, "argv", ["plugin://plugin.video.o2tv/", "1", ""]):
+            spec = importlib.util.spec_from_file_location(
+                "o2tv_addon_test", os.path.join(os.path.dirname(HERE), "addon.py"))
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+        return m, gui, plugin, xbmc, props
+
+
+class AddonReloginTests(unittest.TestCase):
+    """Mrtva relacia pri prehravani/zozname/importe: prihlasenie hned, bez cakania
+    na kolo sluzby."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.d, ignore_errors=True))
+        self.m, self.gui, self.plugin, self.xbmc, self.props = AddonStubs.load(self.d)
+        self.sso_file = os.path.join(self.d, "sso.json")
+        self.api = mock.Mock()
+        self.dead = self.m.O2Error("mrtva", "500017")
+        self.m.cdn_session = lambda u: u
+        self.m.url_for = lambda **kw: "plugin://x/?" + urllib.parse.urlencode(kw)
+
+    def _file(self):
+        sso.save(self.sso_file, COOKIES)
+
+    def _resolved(self):
+        return self.plugin.setResolvedUrl.call_args[0][1]
+
+    def test_play_relogins_and_retries_once(self):
+        self._file()
+        self.api.resolve.side_effect = [self.dead, ("http://m/mpd", None)]
+        self.m.play(self.api, "840007")
+        self.api.auto_login.assert_called_once_with(self.sso_file)
+        self.assertEqual(self.api.resolve.call_count, 2)
+        self.assertTrue(self._resolved())
+        self.assertTrue(self.props.get(self.m.AUTO_DONE))      # service sa to dozvie
+        self.assertNotIn(self.m.AUTO_BUSY, self.props)         # zamok uvolneny
+
+    def test_play_without_sso_file_keeps_old_behaviour(self):
+        self.api.resolve.side_effect = self.dead
+        self.m.play(self.api, "840007")
+        self.api.auto_login.assert_not_called()
+        self.assertFalse(self._resolved())
+
+    def test_play_failed_relogin_shows_error_without_retry(self):
+        self._file()
+        self.api.resolve.side_effect = self.dead
+        self.api.auto_login.side_effect = self.m.O2Error("SSO zle", "SSO")
+        self.m.play(self.api, "840007")
+        self.assertEqual(self.api.resolve.call_count, 1)
+        self.assertFalse(self._resolved())
+        self.assertNotIn(self.m.AUTO_BUSY, self.props)
+        self.assertNotIn(self.m.AUTO_DONE, self.props)
+
+    def test_play_other_errors_do_not_trigger_relogin(self):
+        self._file()
+        self.api.resolve.side_effect = self.m.O2Error("siet", "NET")
+        self.m.play(self.api, "840007")
+        self.api.auto_login.assert_not_called()
+
+    def test_play_nosession_triggers_relogin(self):
+        self._file()
+        self.api.resolve.side_effect = [self.m.O2Error("nie je", "NOSESSION"),
+                                        ("http://m/mpd", None)]
+        self.m.play(self.api, "1")
+        self.api.auto_login.assert_called_once()
+
+    def test_channels_relogin(self):
+        self._file()
+        self.api.channels.side_effect = [self.dead, [{"id": 1}]]
+        self.assertEqual(self.m.channels_with_relogin(self.api), [{"id": 1}])
+        self.api.auto_login.assert_called_once()
+        self.api.channels.side_effect = self.dead              # druhy pokus tiez zlyha
+        with self.assertRaises(self.m.O2Error):
+            self.m.channels_with_relogin(self.api)
+
+    def test_waits_for_service_attempt_instead_of_second_login(self):
+        self._file()
+        import time as _t
+        self.props[self.m.AUTO_BUSY] = str(_t.time())          # sluzba prave bezi
+        self.xbmc.sleep.side_effect = lambda ms: self.props.pop(self.m.AUTO_BUSY, None)
+        self.api.ks.return_value = "KS"
+        self.assertTrue(self.m.auto_relogin(self.api))
+        self.api.auto_login.assert_not_called()
+
+    def test_stale_busy_lock_is_ignored(self):
+        self._file()
+        import time as _t
+        self.props[self.m.AUTO_BUSY] = str(_t.time() - 1000)
+        self.assertTrue(self.m.auto_relogin(self.api))
+        self.api.auto_login.assert_called_once()
+
+    def test_import_logs_in_immediately_when_session_is_ending(self):
+        src = os.path.join(self.d, "o2-sso.json")
+        for left, expected in ((86400, 1), (-5, 1), (5 * 86400, 0)):
+            sso.save(src, COOKIES)
+            self.api.reset_mock()
+            self.api.session_left.return_value = (left, False)
+            with mock.patch.object(self.m, "sso_candidates", lambda: [src]):
+                self.m.import_sso(self.api)
+            self.assertFalse(os.path.exists(src))              # zdroj zmazany
+            self.assertEqual(self.api.auto_login.call_count, expected)
+            os.remove(self.sso_file)
+
+    def test_no_secret_in_logs_or_toasts(self):
+        self._file()
+        self.api.resolve.side_effect = self.dead
+        self.api.auto_login.side_effect = self.m.O2Error("zle", "SSO")
+        self.m.play(self.api, "1")
+        seen = " ".join(str(c) for c in self.xbmc.log.call_args_list)
+        seen += " ".join(str(c) for c in self.gui.Dialog.return_value.notification.call_args_list)
+        self.assertNotIn("SECRET", seen)
+
 
 if __name__ == "__main__":
     unittest.main()
