@@ -62,6 +62,7 @@ class O2API:
         self._state = None
         self._log = log
         self.write_error = ""    # posledne zlyhanie zapisu stavu
+        self._hold_until = 0     # do kedy neskusat znova zlyhanu obnovu
 
     # ---------- stav mimo nastavení ----------
     def _state_path(self):
@@ -135,13 +136,20 @@ class O2API:
                 return r.read()
         except urllib.error.HTTPError as e:
             raise O2Error("HTTP %s: %s" % (e.code, e.read()[:300]))
+        except OSError as e:
+            # URLError, timeout, odmietnute spojenie - bez prevodu by vypadok
+            # siete obisiel vsetky "except O2Error" a zabil sluzbu
+            raise O2Error("sieť: %s" % e, "NET")
 
     def _kalt(self, action, body, _retry=False):
         tag = self.s.get("client_tag")
         payload = {"clientTag": tag, "apiVersion": API_VER, "partnerId": PARTNER_ID}
         payload.update(body)
         url = "%s/%s?format=1&clientTag=%s" % (KALT, action, tag)
-        res = json.loads(self._post(url, payload).decode("utf-8"))
+        try:
+            res = json.loads(self._post(url, payload).decode("utf-8"))
+        except ValueError as e:
+            raise O2Error("neplatná odpoveď Kaltury: %s" % e, "BADJSON")
         result = res.get("result", res)
         if isinstance(result, dict) and result.get("error"):
             if ("500016" in str(result["error"]) and not _retry
@@ -219,12 +227,16 @@ class O2API:
         except Exception:
             got = 0
         cur = self.st_get("ks")
-        if cur and exp - now > 300 and now - got < self.MAX_AGE:
+        if cur and exp - now > 300 and (now - got < self.MAX_AGE
+                                        or now < self._hold_until):
             return cur
         try:
             return self.refresh()
         except O2Error as e:
             if cur and exp - now > 300:
+                # mrtvy refresh (500017) sa do hodiny nezmeni, vypadok siete
+                # skor - bez pauzy skusal export EPG obnovu pri kazdom volani
+                self._hold_until = now + (3600 if e.code == "500017" else 120)
                 # stara KS este plati, takze doplnok hra dalej a vypadok
                 # obnovy by inak nebolo v logu vidiet - az kym nie je neskoro
                 if self._log:

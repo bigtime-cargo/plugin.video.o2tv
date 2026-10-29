@@ -102,6 +102,9 @@ def tick(api):
                 "O2 TV", "Relácia vypršala — otvor doplnok a prihlás sa",
                 xbmcgui.NOTIFICATION_WARNING, 10000)
             return False
+        if e.code in ("NET", "BADJSON"):
+            # za vypadok siete clientTag nemoze
+            return False
         if ADDON.getSetting("auto_clienttag") == "true":
             try:
                 tag = api.update_client_tag()
@@ -433,12 +436,21 @@ def main():
     last_warn = 0
     first = True
     while not monitor.abortRequested():
-        ok = tick(api)
+        # nic nesmie ukoncit tuto slucku - bez nej sa relacia do restartu
+        # Kodi neobnovi a po par dnoch prestane hrat vsetko
+        try:
+            ok = tick(api)
+        except Exception as e:
+            log("údržba relácie spadla: %r" % e, True)
+            ok = False
         # pri starte odpocet vzdy, potom uz len ked je naliehavy - a aj
         # vtedy nanajvys raz za WARN_EVERY, nech toasty nezavadzaju
         if first or time.time() - last_warn > WARN_EVERY:
-            if session_notice(api, ok, force=first):
-                last_warn = time.time()
+            try:
+                if session_notice(api, ok, force=first):
+                    last_warn = time.time()
+            except Exception as e:
+                log("odpočet zlyhal: %r" % e, True)
         first = False
         if ok:
             try:
