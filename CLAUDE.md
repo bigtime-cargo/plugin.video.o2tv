@@ -12,6 +12,9 @@ sebestačné — žiadny server, žiadny sidecar.
     resources/settings.xml    starý formát (Kodi 18-21): udid, clientTag, EPG dni
     resources/lib/api.py      Kaltura klient (login, refresh, kanály, EPG, playback)
     resources/lib/export.py   playlist.m3u + epg.xml pre IPTV Simple
+    resources/lib/sso.py      automatické schválenie kódu zariadenia (SSO cookie)
+    tools/test_sso.py         offline testy (python3 -m unittest tools.test_sso -v)
+    tools/auto_approve.py     ručná skúška schválenia na ostrom O2
     tools/login.py            prihlásenie mimo Kodi (do zipu sa nebalí)
 
 Druhý repozitár: ~/kodi-repo (Kodi repozitár, Pages z /docs). Je natrvalo
@@ -249,8 +252,9 @@ Request conditions → blokovanie `*o2tv.sk*`.
   je chránená **Cloudflare Turnstile** („Prihlásenie nebolo vyhodnotené
   ako bezpečné"). Obchádzať sa nebude.
 
-Záver: prihlásenie bez človeka nie je možné, OTP je interaktívne. Device
-flow je maximum, čo sa dá — a stačí naň mobil.
+Záver (11. 9.): bez človeka sa nedá prihlásiť heslom ani OTP. Neskôr sa
+našla cesta cez SSO cookie z prehliadača, ktorá schváli device flow sama —
+viď „Automatické prihlásenie (1.2.0)“.
 
 ### Telka (Android TV) — cez adb z PC (od 1.1.11 už len záloha)
 
@@ -294,6 +298,60 @@ Poznámky z 7. 9. 2026:
   nie do doplnku. Na doplnok používaj `tools/login.py`
 - `!` v Claude Code nemá stdin, takže žiadne `input()` — preto je
   `tools/login.py` rozdelený na dva neinteraktívne kroky
+
+## Automatické prihlásenie (1.2.0)
+
+Doplnok sa po vypršaní relácie (500017, pravidlo 4) vie prihlásiť nanovo
+sám — bez človeka, bez kódu na mobile. Ručné prihlásenie (kód zariadenia)
+ostáva ako záloha a nič z neho sa neodstránilo.
+
+**Ako to ide:** `O2API.auto_login(cookies_path)` (api.py) vyžiada kód
+zariadenia (`device_start`), `sso.approve` (resources/lib/sso.py, bez
+importov Kodi) ho schváli cez SSO cookie ako používateľ rukou na
+`o2.sk/zariadenie` (POST „Pokračovať“, POST „Povoliť“), potom sa v cykle
+(max ~40 s, interval z odpovede) volá `device_poll` a token ide do
+`login_with_token` — rovnaká cesta ako po ručnom device flow (ukladá
+`login_time`, ponecháva existujúce UDID, volá `register_device`). Nové UDID
+sa nevyrába; bez UDID auto_login skončí s `NOSESSION`. Pri zlyhaní sa
+session.json nemení. Server cookie pri použití obnoví (nová hodnota
+KEYCLOAK_IDENTITY v Set-Cookie), doplnok ju uloží späť.
+
+**Kde je cookie:** `sso.json` v profile doplnku (addon_data/plugin.video.o2tv/),
+práva 600, atómový zápis. Do Kodi sa dostane tlačidlom v nastaveniach
+(„Automatické prihlásenie“ → „Importovať SSO cookie zo súboru“): hľadá
+`o2-sso.json` v `/storage/emulated/0/Download/`, `~/Downloads`, `~/`
+(inak ponúkne výber súboru), po overení ho uloží a **zdrojový súbor zmaže**.
+„Zmazať SSO cookie“ odstráni `sso.json`. Cookie je JSON
+`{"KEYCLOAK_IDENTITY": "...", "KEYCLOAK_SESSION": "..."}` (DevTools →
+Application → Cookies → https://identity.o2.sk). Nikdy do settings.xml.
+
+**Kedy sa spúšťa (service.py, `AutoLogin`):** v hlavnej slučke (aj raz po
+štarte), keď `sso.json` existuje A (`session_left()` ≤ 2 dni ALEBO refresh
+vrátil 500017). Poistky: po neúspechu najbližší pokus o 1 h, po úspechu nie
+skôr ako o 6 h, max 3 neúspechy po sebe, potom pauza do reštartu Kodi
+(nový import cookie ju vynuluje). Úspech = toast „Prihlásenie obnovené
+automaticky“; pri zlyhaní ostáva pôvodný toast o ručnom prihlásení.
+
+**Poistky v sso.py:** klikne sa LEN na tlačidlá s popiskom presne
+„Pokračovať“ a „Povoliť“ (nikdy „Pokračovať s iným účtom“, „Zamietnuť“).
+Zastaví sa pri neznámom poli formulára, pri skutočnom widgete
+Turnstile/CAPTCHA (`WIDGET`; samotný skript `turnstile/api.js` v hlavičke
+šablóny widget nie je), pri odkaze (aj presmerovaní) na iný host než
+`identity.o2.sk` a po viac než 8 krokoch. Schvaľuje sa len kód, ktorý si
+doplnok práve sám vyžiadal. **Turnstile sa neobchádza** — ak ho O2 pridá aj
+na túto cestu, auto_login zlyhá s hláškou a treba ručné prihlásenie.
+
+**Čo je overené:** `tools/auto_approve.py` (29. 10. 2026, ostrý O2): dva POST-y
+(Pokračovať, Povoliť), token endpoint vydal token s `authenticated_via=OTP`
+a `authenticated_via_subscriber_id`; cookie je kĺzavé (server ho pri každom
+použití obnoví, ~154 dní). Neoverené na ostro: celý reťazec
+`auto_login` → `login_with_token` v Kodi (offline testy:
+`python3 -m unittest tools.test_sso -v`).
+
+**Bezpečnosť:** SSO cookie je kľúč k CELÉMU O2 účtu (nielen k O2 TV). Nikdy
+do gitu (`sso.json`, `o2-sso.json` sú v .gitignore), do logov, výnimiek,
+toastov ani do settings.xml. Zdrojový `o2-sso.json` sa po importe maže.
+Kto má telku/profil, má účet — preto práva 600 a import len na vlastné zariadenia.
 
 ## Publikovanie — po KAŽDEJ zmene doplnku
 

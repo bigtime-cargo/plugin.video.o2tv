@@ -87,11 +87,24 @@ def session_notice(api, healthy, force=False):
     return True
 
 
-def tick(api):
+def dead_notice():
+    xbmcgui.Dialog().notification(
+        "O2 TV", "Relácia vypršala — otvor doplnok a prihlás sa",
+        xbmcgui.NOTIFICATION_WARNING, 10000)
+
+
+def tick(api, auto=None):
     """Jedno kolo údržby. Vracia True ak session drží.
-    api.ks() sa samo postará o dennú obnovu relácie."""
+    api.ks() sa samo postará o dennú obnovu relácie.
+    `auto` (AutoLogin): pri 500017 si označí, že relácia je mŕtva; toast
+    o ručnom prihlásení sa vtedy odloží, kým sa automatické prihlásenie
+    nepokúsi (ak by zlyhalo, ukáže ho main())."""
     try:
         api.ks()
+        if auto is not None:
+            # ks() pri mrtvom refreshi vrati este platnu staru KS, ale
+            # 500017 si api zapamata
+            auto.dead = api.refresh_dead
         return True
     except O2Error as e:
         log("refresh zlyhal: %s" % e, True)
@@ -99,9 +112,10 @@ def tick(api):
             # neplatny refresh token - iny clientTag na tom nic nezmeni
             log("relácia je neobnoviteľná, treba nové prihlásenie "
                 "(doplnok O2 TV → Prihlásiť sa nanovo)", True)
-            xbmcgui.Dialog().notification(
-                "O2 TV", "Relácia vypršala — otvor doplnok a prihlás sa",
-                xbmcgui.NOTIFICATION_WARNING, 10000)
+            if auto is not None:
+                auto.dead = True
+            if auto is None or not auto.can_try():
+                dead_notice()
             return False
         if e.code in ("NET", "BADJSON"):
             # za vypadok siete clientTag nemoze
@@ -434,6 +448,89 @@ class EndWatch(threading.Thread):
         return None
 
 
+# ---------- automaticke prihlasenie cez SSO cookie ----------
+# Refresh token umiera so svojou KS (~7 dni, 500017). Ked je v profile
+# sso.json (import cez nastavenia), doplnok si kod zariadenia schvali sam
+# (api.auto_login). Poistky proti zahlteniu servera O2:
+SSO_FILE = "sso.json"
+SSO_PROP = "o2tv.sso_changed"    # nastavi addon.py po importe/zmazani cookie
+AUTO_LEFT = 2 * 86400            # skusat, ked do konca prihlasenia ostava <= 2 dni
+AUTO_FAIL_WAIT = 3600            # po neuspechu najblizsi pokus o 1 h
+AUTO_OK_WAIT = 6 * 3600          # po uspechu nie skor ako o 6 h
+AUTO_MAX_FAILS = 3               # tolko neuspechov po sebe, potom pauza do restartu
+
+
+class AutoLogin:
+    def __init__(self, api, path, monitor):
+        self.api, self.path, self.monitor = api, path, monitor
+        self.next_try = 0
+        self.fails = 0
+        self.paused = False
+        self.dead = False        # refresh vratil 500017 (nastavuje tick)
+        self.failed_now = False  # posledne run() sa pokusilo a zlyhalo
+        self.seen_prop = xbmcgui.Window(10000).getProperty(SSO_PROP)
+
+    def can_try(self):
+        """Smie sa teraz pokusit (subor existuje, poistky to dovoluju)?"""
+        self._check_prop()
+        return (not self.paused and time.time() >= self.next_try
+                and os.path.isfile(self.path))
+
+    def _check_prop(self):
+        # novy import cookie = cisty stol (pauza po 3 neuspechoch by inak
+        # trvala az do restartu Kodi)
+        cur = xbmcgui.Window(10000).getProperty(SSO_PROP)
+        if cur != self.seen_prop:
+            self.seen_prop = cur
+            self.fails, self.paused, self.next_try = 0, False, 0
+            log("automatické prihlásenie: cookie sa zmenilo, poistky vynulované")
+
+    def run(self):
+        """Skusi prihlasenie, ak je potrebne a smie sa. True = prihlaseny."""
+        self.failed_now = False
+        if not self.can_try():
+            return False
+        left, _ = self.api.session_left()
+        if not (self.dead or left <= AUTO_LEFT):
+            return False
+        why = "refresh vrátil 500017" if self.dead else \
+            "do konca prihlásenia ostáva %s" % human(left)
+        log("automatické prihlásenie: pokus %d/%d (%s)"
+            % (self.fails + 1, AUTO_MAX_FAILS, why))
+        try:
+            self.api.auto_login(self.path, sleep=self.monitor.waitForAbort,
+                                should_stop=self.monitor.abortRequested)
+        except O2Error as e:
+            if e.code == "ABORT":
+                return False
+            self._failed("%s (%s)" % (e, e.code or "-"))
+            return False
+        except Exception as e:
+            # sprava vynimky sa nelogue - mohla by obsahovat cokolvek
+            self._failed("neočakávaná chyba %s" % type(e).__name__)
+            return False
+        self.fails, self.dead = 0, False
+        self.next_try = time.time() + AUTO_OK_WAIT
+        log("automatické prihlásenie: úspech")
+        xbmcgui.Dialog().notification(
+            "O2 TV", "Prihlásenie obnovené automaticky",
+            xbmcgui.NOTIFICATION_INFO, 5000)
+        return True
+
+    def _failed(self, reason):
+        self.fails += 1
+        self.failed_now = True
+        self.next_try = time.time() + AUTO_FAIL_WAIT
+        if self.fails >= AUTO_MAX_FAILS:
+            self.paused = True
+            log("automatické prihlásenie zlyhalo (%s); %d neúspechov po sebe — "
+                "pauza do reštartu Kodi, treba ručné prihlásenie"
+                % (reason, self.fails), True)
+        else:
+            log("automatické prihlásenie zlyhalo (%s); ďalší pokus najskôr o 1 h"
+                % reason, True)
+
+
 def sleep_abortable(monitor, seconds, chunk=2):
     """Caka po malych kuskoch, aby Python stihol prijat ukoncenie skriptu."""
     waited = 0
@@ -464,6 +561,7 @@ def main():
         return
 
     profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
+    auto = AutoLogin(api, os.path.join(profile, SSO_FILE), monitor)
     KeepAlive(monitor).start()
     EndWatch(monitor).start()
     last_export = 0
@@ -473,10 +571,19 @@ def main():
         # nic nesmie ukoncit tuto slucku - bez nej sa relacia do restartu
         # Kodi neobnovi a po par dnoch prestane hrat vsetko
         try:
-            ok = tick(api)
+            ok = tick(api, auto)
         except Exception as e:
             log("údržba relácie spadla: %r" % e, True)
             ok = False
+        # automaticke prihlasenie (pri starte aj v slucke): ked ostavaju
+        # <= 2 dni alebo refresh vratil 500017 a existuje sso.json
+        try:
+            if auto.run():
+                ok = tick(api, auto)
+            elif auto.dead and auto.failed_now:
+                dead_notice()    # pokus zlyhal - zostava rucne prihlasenie
+        except Exception as e:
+            log("automatické prihlásenie spadlo: %s" % type(e).__name__, True)
         # pri starte odpocet vzdy, potom uz len ked je naliehavy - a aj
         # vtedy nanajvys raz za WARN_EVERY, nech toasty nezavadzaju
         if first or time.time() - last_warn > WARN_EVERY:

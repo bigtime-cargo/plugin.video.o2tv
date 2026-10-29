@@ -8,6 +8,10 @@
     <setting id="entitled_ids" type="text" label="" default="" visible="false"/>
     <setting id="entitled_ts" type="text" label="" default="0" visible="false"/>
   </category>
+  <category label="Automatické prihlásenie">
+    <setting label="Importovať SSO cookie zo súboru" type="action" action="RunPlugin(plugin://plugin.video.o2tv/?action=import_sso)"/>
+    <setting label="Zmazať SSO cookie" type="action" action="RunPlugin(plugin://plugin.video.o2tv/?action=delete_sso)"/>
+  </category>
   <category label="Prehrávanie">
     <setting id="client_tag" type="text" label="clientTag" default="9.66.1-PC"/>
     <setting id="auto_clienttag" type="bool" label="Aktualizovať clientTag automaticky" default="true"/>

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, os
+import sys, os, json, time
 import urllib.parse, urllib.request
 
 import xbmc, xbmcgui, xbmcplugin, xbmcaddon, xbmcvfs
@@ -11,6 +11,8 @@ BASE = sys.argv[0] if len(sys.argv) > 0 else "plugin://plugin.video.o2tv/"
 sys.path.insert(0, xbmcvfs.translatePath(
     os.path.join(ADDON.getAddonInfo("path"), "resources", "lib")))
 from api import O2API, O2Error, gen_udid, UA   # noqa: E402
+import sso   # noqa: E402
+from sso import SsoError   # noqa: E402
 
 # adresa CDN relacie pre keep-alive v service.py (window property, vidia ju
 # oba procesy)
@@ -211,6 +213,108 @@ def play(api, cid, start_ts=None, end_ts=None):
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
 
+# ---------- SSO cookie pre automaticke prihlasenie (1.2.0) ----------
+# Cookie je kluc k celemu O2 uctu: ide len do profilu doplnku (sso.json,
+# prava 600), nikdy do settings.xml, a nikdy do logu ani toastu.
+SSO_FILE = "sso.json"
+IMPORT_NAME = "o2-sso.json"
+SSO_PROP = "o2tv.sso_changed"    # service.py podla neho vynuluje poistky
+
+
+def sso_path():
+    return os.path.join(xbmcvfs.translatePath(ADDON.getAddonInfo("profile")),
+                        SSO_FILE)
+
+
+def sso_candidates():
+    home = os.path.expanduser("~")
+    return [os.path.join(d, IMPORT_NAME) for d in (
+        "/storage/emulated/0/Download", "/storage/emulated/0/Downloads",
+        "/sdcard/Download",
+        os.path.join(home, "Downloads"), os.path.join(home, "Stiahnuté"),
+        home)]
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        f = xbmcvfs.File(path)       # napr. cesta z browse() cez special://
+        try:
+            return f.read()
+        finally:
+            f.close()
+
+
+def remove_file(path):
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return bool(xbmcvfs.delete(path))
+
+
+def import_sso():
+    """Nacita o2-sso.json, overi, ulozi do profilu ako sso.json a ZDROJOVY
+    SUBOR ZMAZE - nesmie lezat v Stiahnutych. Hodnoty cookie sa nelogu."""
+    src = next((p for p in sso_candidates() if os.path.isfile(p)), None)
+    if not src:
+        if not xbmcgui.Dialog().yesno(
+                "O2 TV — import SSO cookie",
+                "Súbor %s som nenašiel v Stiahnutých ani v domovskom "
+                "priečinku.\nVybrať ho ručne?" % IMPORT_NAME):
+            return
+        src = xbmcgui.Dialog().browse(
+            1, "Vyber %s" % IMPORT_NAME, "files", ".json", False, False, "")
+        if not src:
+            return
+    try:
+        vals = sso.validate(json.loads(read_text(src)))
+    except (ValueError, OSError, SsoError) as e:
+        # SsoError nesie len nazvy poli, JSON chyba nesie len poziciu
+        notify("Súbor nie je platný: %s" % (e if isinstance(e, SsoError)
+                                            else type(e).__name__), True)
+        log("import SSO cookie zlyhal: %s" % type(e).__name__)
+        return
+    dst = sso_path()
+    if not sso.save(dst, vals) or sso.load(dst) != vals:
+        notify("Cookie sa nepodarilo uložiť do profilu.", True)
+        log("import SSO cookie: zápis do profilu zlyhal")
+        return
+    gone = remove_file(src)
+    xbmcgui.Window(10000).setProperty(SSO_PROP, str(time.time()))
+    exp = sso.identity_exp(vals)
+    until = " (identita platí do %s)" % time.strftime(
+        "%d.%m.%Y", time.localtime(exp)) if exp else ""
+    log("SSO cookie importované%s, zdrojový súbor %s"
+        % (until, "zmazaný" if gone else "NEzmazaný"))
+    if gone:
+        notify("SSO cookie uložené%s. Súbor v Stiahnutých zmazaný." % until)
+    else:
+        notify("SSO cookie uložené, ale súbor %s sa nepodarilo zmazať — "
+               "zmaž ho ručne!" % IMPORT_NAME, True)
+
+
+def delete_sso():
+    path = sso_path()
+    if not os.path.isfile(path):
+        notify("SSO cookie nie je uložené.")
+        return
+    if not xbmcgui.Dialog().yesno(
+            "O2 TV", "Zmazať uložené SSO cookie?\nAutomatické prihlásenie "
+                     "sa vypne, ostane ručné (kód zariadenia)."):
+        return
+    try:
+        os.remove(path)
+    except OSError as e:
+        notify("Cookie sa nepodarilo zmazať: %s" % type(e).__name__, True)
+        return
+    xbmcgui.Window(10000).setProperty(SSO_PROP, str(time.time()))
+    log("SSO cookie zmazané")
+    notify("SSO cookie zmazané.")
+
+
 def main():
     raw = urllib.parse.parse_qs(sys.argv[2][1:]) if len(sys.argv) > 2 else {}
     args = {k[4:] if k.startswith("amp;") else k: v for k, v in raw.items()}
@@ -229,6 +333,10 @@ def main():
     elif action == "login":
         do_login(api)
         xbmc.executebuiltin("Container.Refresh")
+    elif action == "import_sso":
+        import_sso()
+    elif action == "delete_sso":
+        delete_sso()
     else:
         list_channels(api)
 

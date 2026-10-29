@@ -2,6 +2,8 @@
 import json, time, secrets, string
 import urllib.request, urllib.error, urllib.parse
 
+import sso
+
 KALT = "https://3206.frp1.ott.kaltura.com/api_v3/service"
 API_VER, PARTNER_ID, LANG = "5.4.0", 3206, "slk"
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
@@ -63,6 +65,7 @@ class O2API:
         self._log = log
         self.write_error = ""    # posledne zlyhanie zapisu stavu
         self._hold_until = 0     # do kedy neskusat znova zlyhanu obnovu
+        self.refresh_dead = False  # posledna obnova vratila 500017 (service)
 
     # ---------- stav mimo nastavení ----------
     def _state_path(self):
@@ -233,6 +236,8 @@ class O2API:
         try:
             return self.refresh()
         except O2Error as e:
+            if e.code == "500017":
+                self.refresh_dead = True
             if cur and exp - now > 300:
                 # mrtvy refresh (500017) sa do hodiny nezmeni, vypadok siete
                 # skor - bez pauzy skusal export EPG obnovu pri kazdom volani
@@ -266,6 +271,7 @@ class O2API:
         self.st_set(ks=ls["ks"], ks_expiry=int(ls["expiry"]),
                     ks_issued=int(time.time()),
                     refresh_token=ls.get("refreshToken") or rt)
+        self.refresh_dead = False
         return ls["ks"]
 
     # ---------- prihlásenie kódom zariadenia ----------
@@ -326,11 +332,63 @@ class O2API:
                     ks_issued=int(time.time()),
                     login_time=int(time.time()), login_time_est=False,
                     refresh_token=ls.get("refreshToken") or "")
+        self.refresh_dead = False
         # Prihlasenie samo zariadenie do domacnosti nezapise a bez toho
         # getPlaybackContext vracia 1003 "Device not in household" - kanaly
         # aj EPG pritom chodia, takze sa to prejavi az pri prehravani.
         self.register_device()
         return ls
+
+    def auto_login(self, cookies_path, sleep=None, should_stop=None):
+        """Prihlasi nanovo bez cloveka: vyziada kod zariadenia, schvali ho cez
+        SSO cookie zo suboru cookies_path (sso.approve), vyzdvihne token a da
+        ho do login_with_token. Obnovene cookie ulozi spat (server ich pri
+        pouziti posuva). Pouzije existujuce UDID - nove sa nevyrabaju.
+        Pri zlyhani sa stav relacie nemeni (login_with_token pise az po
+        uspechu). Vyhodi O2Error: kod NOSSO (cookie chyba), SSO (schvalenie
+        neprešlo), NOSESSION (chyba UDID), ABORT (vypinanie Kodi).
+        Tajomstva (cookie, tokeny) sa nelogu ani nedavaju do sprav."""
+        cookies = sso.load(cookies_path)
+        if not cookies:
+            raise O2Error("SSO cookie chýba alebo je neplatné.", "NOSSO")
+        if not (self.st_get("udid") or self.s.get("udid")):
+            raise O2Error("Zariadenie nemá UDID — najprv sa prihlás ručne.",
+                          "NOSESSION")
+        dev = self.device_start()
+        try:
+            new = sso.approve(dev["user_code"], cookies)
+        except sso.SsoError as e:
+            self._save_sso(cookies_path, cookies, e.cookies)
+            raise O2Error("Automatické schválenie zlyhalo: %s" % e, "SSO")
+        self._save_sso(cookies_path, cookies, new)
+
+        try:
+            step = min(max(int(dev.get("interval", 5)), 1), 10)
+        except (TypeError, ValueError):
+            step = 5
+        sleep = sleep or time.sleep
+        t0, token = time.time(), None
+        for _ in range(40 // step + 1):
+            if should_stop and should_stop():
+                raise O2Error("Prerušené (Kodi sa vypína).", "ABORT")
+            token = self.device_poll(dev["device_code"])
+            if token or time.time() - t0 > 40:
+                break
+            sleep(step)
+        if not token:
+            raise O2Error("O2 do 40 s nevydalo token po schválení kódu.", "SSO")
+        ls = self.login_with_token(token)
+        if self._log:
+            self._log("automatické prihlásenie OK, KS do %s"
+                      % time.strftime("%Y-%m-%d %H:%M",
+                                      time.localtime(int(ls["expiry"]))))
+        return ls
+
+    def _save_sso(self, path, old, new):
+        """Ulozi obnovene cookie, ak sa zmenili. Zlyhanie zapisu nie je dovod
+        padnut (prihlasenie uz prebehlo), ale musi byt vidiet - bez hodnot."""
+        if new and new != old and not sso.save(path, new) and self._log:
+            self._log("obnovené SSO cookie sa nepodarilo uložiť do %s" % path)
 
     def register_device(self, name="Kodi"):
         """Zapise UDID do domacnosti. Uz registrovane zariadenie Kaltura

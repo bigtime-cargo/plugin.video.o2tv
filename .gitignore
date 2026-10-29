@@ -6,3 +6,5 @@ o2_auth.json
 .claude/settings.local.json
 playlist.m3u
 epg.xml
+sso.json
+o2-sso.json
