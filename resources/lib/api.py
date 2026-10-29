@@ -527,28 +527,40 @@ class O2API:
         return None
 
     # ---------- filter predplatného ----------
-    def entitled_ids(self, channel_ids, progress_cb=None):
-        """Vráti množinu ID kanálov, ktoré máš v predplatnom.
+    def entitled_ids(self, channel_ids, progress_cb=None, should_stop=None):
+        """Vráti (množina ID kanálov v predplatnom, či je výsledok úplný),
+        alebo None, keď sa zistiť nedá (výpadok siete, vypínanie Kodi).
         progress_cb(hotovo, celkom) sa volá priebežne (na zobrazenie postupu)."""
         ok = set()
+        complete = True
         total = len(channel_ids)
         for i, cid in enumerate(channel_ids):
+            # kanal po kanali je to az minuta - vypnutie Kodi nesmie cakat
+            if should_stop and should_stop():
+                return None
             try:
                 pc = self.playback_context(cid, "media", "media", "PLAYBACK")
                 if not self.not_entitled(pc):
                     ok.add(cid)
-            except O2Error:
+            except O2Error as e:
+                if e.code == "NET":
+                    # bez siete by zvysok kanalov presiel ako predplateny
+                    # a to by sa ulozilo na 12 h
+                    return None
                 ok.add(cid)      # pri chybe kanál radšej nechaj
+                complete = False
             except Exception:
                 ok.add(cid)
+                complete = False
             if progress_cb:
                 progress_cb(i + 1, total)
         # poistka zo sidecaru: podozrivo málo -> neprepisuj cache
         if total and not ok:
             return None
-        return ok
+        return ok, complete
 
-    def entitled_cached(self, channel_ids, ttl=43200, progress_cb=None):
+    def entitled_cached(self, channel_ids, ttl=43200, progress_cb=None,
+                        should_stop=None):
         """Filter s 12h cache v nastaveniach addonu."""
         now = int(time.time())
         try:
@@ -558,9 +570,13 @@ class O2API:
             ts_, cached = 0, ""
         if cached and now - ts_ < ttl:
             return set(cached.split(","))
-        ok = self.entitled_ids(channel_ids, progress_cb)
-        if ok is None:
-            return set(channel_ids)   # dočasne nechaj všetky
-        self.s.set("entitled_ids", ",".join(sorted(ok)))
-        self.s.set("entitled_ts", str(now))
+        res = self.entitled_ids(channel_ids, progress_cb, should_stop)
+        if res is None:
+            # dočasne: posledný známy zoznam, inak všetky
+            return set(cached.split(",")) if cached else set(channel_ids)
+        ok, complete = res
+        if complete:
+            # neuplny vysledok neulozit - pri dalsom exporte sa skusi znova
+            self.s.set("entitled_ids", ",".join(sorted(ok)))
+            self.s.set("entitled_ts", str(now))
         return ok

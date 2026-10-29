@@ -8,6 +8,16 @@ class Aborted(Exception):
     """Kodi sa vypina - export sa prerušil a nic sa nezapisalo."""
 
 
+class Incomplete(Exception):
+    """Cast EPG sa nestiahla a na disku je este cerstve EPG - nic sa nezapisalo."""
+
+
+# Neuplne EPG je horsie nez to stare, ale len kym je stare cerstve: EPG drzi
+# 3 dni dopredu, takze trvalo zlyhavajuca davka by inak cez par dni vyprazdnila
+# program vsetkym kanalom.
+KEEP_OLD_EPG = 24 * 3600
+
+
 def xesc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace("'", "&apos;").replace('"', "&quot;"))
@@ -22,9 +32,17 @@ def _write(path, text):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        # inak by pri plnom disku ostaval tmpXXXX aj vo verejnom export_dir
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def build_m3u(chans, epg_url=None):
@@ -45,7 +63,9 @@ def build_m3u(chans, epg_url=None):
 
 
 def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None, should_stop=None):
+    """Vracia (xml, pocet zlyhanych davok)."""
     now = int(time.time())
+    failed = 0
     start_ts, end_ts = now - days_back * 86400, now + days_fwd * 86400
     id2name = {c["id"]: c["name"] for c in chans}
 
@@ -68,6 +88,7 @@ def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None, should_stop=None)
         except Exception as e:
             if log:
                 log("EPG dávka %d zlyhala: %s" % (i // 5, e))
+            failed += 1
             continue
         for p in progs:
             if p.get("objectType") not in ("KalturaProgramAsset", "KalturaRecordingAsset"):
@@ -82,22 +103,37 @@ def build_xmltv(api, chans, days_back=7, days_fwd=3, log=None, should_stop=None)
                 xml.append('<desc>%s</desc>' % xesc(p["description"]))
             xml.append('</programme>')
     xml.append('</tv>')
-    return "\n".join(xml)
+    return "\n".join(xml), failed
 
 
 def export_all(api, profile_dir, days_back=7, days_fwd=3, log=None, extra_dir=None,
                should_stop=None):
     """Vygeneruje playlist a EPG. Vracia (počet kanálov, počet programov).
     Pri ukončovaní Kodi vyhodí Aborted a nezapíše nič — neúplné EPG je
-    horšie než to staré, ktoré na disku už je."""
+    horšie než to staré, ktoré na disku už je. Z rovnakého dôvodu vyhodí
+    Incomplete, keď časť EPG chýba a staré EPG je ešte čerstvé."""
     chans = api.channels()
-    ok = api.entitled_cached([c["id"] for c in chans])
+    ok = api.entitled_cached([c["id"] for c in chans], should_stop=should_stop)
+    if should_stop and should_stop():
+        raise Aborted()
     chans = [c for c in chans if c["id"] in ok]
 
-    xml = build_xmltv(api, chans, days_back, days_fwd, log, should_stop)
+    xml, failed = build_xmltv(api, chans, days_back, days_fwd, log, should_stop)
 
-    targets = [(os.path.join(profile_dir, "playlist.m3u"),
-                os.path.join(profile_dir, "epg.xml"))]
+    epg_main = os.path.join(profile_dir, "epg.xml")
+    if failed:
+        try:
+            age = time.time() - os.path.getmtime(epg_main)
+        except OSError:
+            age = None
+        if age is not None and age < KEEP_OLD_EPG:
+            raise Incomplete("%d dávok EPG zlyhalo, ponechávam EPG staré %.1f h"
+                             % (failed, age / 3600.0))
+        if log:
+            log("%d dávok EPG zlyhalo, staré EPG je staršie než %d h — "
+                "zapisujem neúplné" % (failed, KEEP_OLD_EPG // 3600))
+
+    targets = [(os.path.join(profile_dir, "playlist.m3u"), epg_main)]
     if extra_dir:
         targets.append((os.path.join(extra_dir, "playlist.m3u"),
                         os.path.join(extra_dir, "o2tv_epg.xml")))

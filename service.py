@@ -29,6 +29,7 @@ def log(msg, err=False):
 STALE_AFTER = 2 * 86400
 WARN_EVERY = 6 * 3600
 LOW_LEFT = 2 * 86400     # odkedy je odpocet naliehavy
+EXPORT_RETRY = 30 * 60   # po zlyhanom exporte EPG
 
 
 def human(sec):
@@ -128,6 +129,8 @@ RESUME_PROP = "o2tv.play_url"
 PING_EVERY = 20          # bezpecne pod nameranym prahom (30 s este preslo)
 KEEPALIVE_MAX = 45 * 60  # dlhsiu pauzu uz nedrzime, zbytocne by blokovala
                          # jeden z dvoch subeznych streamov
+FOREIGN_FORGET = 20      # tak dlho smie hrat cudzie video, kym zabudneme
+                         # adresu O2 (prekrytie pri prepinani na O2 je kratsie)
 
 
 class KeepAlive(threading.Thread):
@@ -141,6 +144,7 @@ class KeepAlive(threading.Thread):
         self.paused_since = 0
         self.seen_video = False
         self.dead = False
+        self.foreign_since = 0
 
     def run(self):
         while not self.monitor.abortRequested():
@@ -157,6 +161,18 @@ class KeepAlive(threading.Thread):
         if not url:
             return
         playing = xbmc.getCondVisibility("Player.HasVideo")
+        if playing and not self.ours(url):
+            # hra nieco ine (Stream Cinema, YouTube...) a adresa ostala po O2,
+            # napr. ked sa ine video pustilo bez medzery. restart() by ten
+            # film nahradil kanalom O2, preto ju po chvili zabudneme.
+            now = time.time()
+            if not self.foreign_since:
+                self.foreign_since = now
+            elif now - self.foreign_since > FOREIGN_FORGET:
+                log("hrá iné video — zabúdam adresu O2")
+                self.forget()
+            return
+        self.foreign_since = 0
         if playing:
             self.seen_video = True
         if not xbmc.getCondVisibility("Player.Paused"):
@@ -172,10 +188,7 @@ class KeepAlive(threading.Thread):
             # az ked prehravac naozaj bezal - inak by sa adresa zmazala
             # v tej sekunde medzi resolve a startom prehravania
             if self.seen_video and not playing:
-                win.clearProperty(KEEPALIVE_PROP)
-                win.clearProperty(RESUME_PROP)
-                self.seen_video = False
-                self.dead = False
+                self.forget()
             return
         now = time.time()
         if not self.paused_since:
@@ -206,6 +219,27 @@ class KeepAlive(threading.Thread):
             log("keep-alive zlyhal: %s" % e, True)
         except Exception as e:
             log("keep-alive zlyhal: %s" % e, True)
+
+    @staticmethod
+    def ours(url):
+        """Hra O2? addon.py dava prehravacu manifest z KEEPALIVE_PROP, Kodi
+        moze hlasit aj povodnu plugin:// adresu; program z EPG hra ako pvr://
+        (IPTV Simple na telke cita len playlist z exportu tohto doplnku)."""
+        try:
+            f = xbmc.Player().getPlayingFile()
+        except RuntimeError:
+            return True     # prave nic nehra - o tom rozhoduje zvysok tick()
+        return (f == url or f.startswith("pvr://")
+                or f.startswith("plugin://plugin.video.o2tv/"))
+
+    def forget(self):
+        win = xbmcgui.Window(10000)
+        win.clearProperty(KEEPALIVE_PROP)
+        win.clearProperty(RESUME_PROP)
+        self.seen_video = False
+        self.dead = False
+        self.paused_since = 0
+        self.foreign_since = 0
 
     def restart(self):
         """Pusti to iste od tej istej sekundy. Nove volanie si vypyta cerstvy
@@ -472,7 +506,10 @@ def main():
                     log("export prerušený, Kodi sa vypína")
                     break
                 except Exception as e:
+                    # dalsi pokus o EXPORT_RETRY, nie o 10 min - export je
+                    # stovka volani API a chyba v datach sa sama neopravi
                     log("export zlyhal: %s" % e, True)
+                    last_export = time.time() - every + EXPORT_RETRY
         if sleep_abortable(monitor, 600):
             break
     log("service koniec")
