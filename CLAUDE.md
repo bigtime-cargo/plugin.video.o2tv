@@ -90,6 +90,29 @@ Zmerané 14. 10. 2026 na telke (ISA 21.5.25):
 - Názov `CATCHUP`/`START_OVER` v logu `resolve:` o type manifestu nič
   nehovorí — kvôli tomu `end_ts` je bežiaci program skoro vždy `CATCHUP`.
 
+## Odolnosť služby (1.1.21–1.1.22, audit 29. 10. 2026)
+
+- `_post` mení sieťové chyby (`OSError`: URLError, timeout) na `O2Error(code="NET")`,
+  zlý JSON v `_kalt` na `O2Error(code="BADJSON")`. Inak obišli každé `except O2Error`
+  a ukončili hlavnú slučku služby (do reštartu Kodi žiadna obnova ani export).
+  Slučka v `main()` je navyše celá v `try` — nesmie skončiť.
+- `ks()` po zlyhanej obnove 1 h (500017) / 2 min (iné) nevolá refresh znova
+  (`_hold_until`, len v rámci procesu). Predtým export skúšal mŕtvy refresh pri
+  každom volaní API (13× za 46 s).
+- `KeepAlive.ours()`: keď 20 s (`FOREIGN_FORGET`) hrá cudzie video, adresy O2
+  sa zabudnú — inak by `restart()` nahradil film zo SC kanálom O2. Za O2 sa
+  považuje manifest z `KEEPALIVE_PROP`, `plugin://plugin.video.o2tv/` aj `pvr://`
+  (IPTV Simple na telke číta len náš export). Ktorú adresu vráti
+  `getPlayingFile()` pri pluginovej položke, na telke overené nie je.
+- Zlyhaná dávka EPG: `export_all` vyhodí `Incomplete` a nezapíše nič, kým je
+  staré `epg.xml` mladšie než 24 h (`KEEP_OLD_EPG`); staršie prepíše aj neúplným.
+  Neúspešný export skúša znova o 30 min (`EXPORT_RETRY`), nie každých 10.
+- `entitled_ids` pri sieťovej chybe vráti None (nič sa neuloží, použije sa
+  posledný známy zoznam) a pri vypínaní Kodi skončí; neúplný výsledok sa
+  neukladá na 12 h.
+- Na telku sa nasadzuje cez `~/kontrola-TCL/nastroje/kontrola-zaplat.sh --oprav`
+  (porovnáva obsah, nie číslo verzie).
+
 ## Relácie — pravidlá, na ktorých sa nešetrí
 
 Prihlásenie len raz cez Keycloak (access token z prehliadača), ďalej
