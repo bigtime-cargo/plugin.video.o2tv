@@ -455,6 +455,10 @@ class EndWatch(threading.Thread):
 # manifest nacitame sami a pri vstupe do bloku preskocime na jeho koniec.
 # Kazdy blok najviac raz - kto sa vrati spat, mieri tam sam.
 ADS_RELOAD = 30     # s, ako casto sa znova cita manifest bezieho programu
+AD_STEADY = 2       # tolko tikov po sebe musi poloha plynule rast, kym sa smie skakat
+AD_VERIFY = 3.0     # s po skoku, kedy sa overi, ci prehravac naozaj preskocil
+AD_TRIES = 3        # najviac pokusov o skok na jeden blok
+AD_LIVE_GAP = 8     # s, o kolko musi byt koniec bloku starsi nez zivy okraj
 AD_LEAD = 1.5       # s, o kolko skor pred koncom bloku sa spusti program (cue-in prichadza tesne po zaciatku programu)
 
 
@@ -471,6 +475,11 @@ class AdSkip(threading.Thread):
         self.skipped = set()
         self.fetched = 0
         self.dynamic = False
+        self.origin = None      # cas prveho segmentu bezieho programu (poloha 0)
+        self.last_pos = None
+        self.steady = 0
+        self.verify = None      # (blok, ciel, kedy overit)
+        self.tries = {}
 
     def run(self):
         while not self.monitor.abortRequested():
@@ -494,16 +503,41 @@ class AdSkip(threading.Thread):
             self.reset(url)
         if not self.fetched or (self.dynamic and now - self.fetched > ADS_RELOAD):
             self.load(url)
-        if not self.breaks or xbmc.getCondVisibility("Player.Seeking"):
+        # skok hned po otvoreni dalsieho programu by zapadol do prehravaca, ktory
+        # sa este len rozbieha (18:44:21 skok, demuxer 18:44:22) - cakame, kym
+        # poloha plynule rastie
+        if (not self.breaks or xbmc.getCondVisibility("Player.Seeking")
+                or not xbmc.getCondVisibility("Player.Playing")
+                or xbmc.getCondVisibility("Player.Caching")):
+            self.steady = 0
             return
         player = xbmc.Player()
-        b = ads.break_at(self.breaks, player.getTime(), self.skipped)
+        pos = player.getTime()
+        if self.last_pos is not None and 0.3 < pos - self.last_pos < 5:
+            self.steady += 1
+        else:
+            self.steady = 0
+        self.last_pos = pos
+        if self.steady < AD_STEADY:
+            return
+        if self.verify and now >= self.verify[2]:
+            b, target, _ = self.verify
+            self.verify = None
+            if pos < target - 3 and b[0] - 0.3 <= pos < b[1] - 1.0:
+                n = self.tries[b] = self.tries.get(b, 0) + 1
+                if n < AD_TRIES:
+                    log("skok cez reklamu neprešiel (poloha %d s) — skúšam znova" % pos)
+                    self.skipped.discard(b)
+        b = ads.break_at(self.breaks, pos, self.skipped)
         if not b:
             return
         self.skipped.add(b)
+        target = max(b[0], b[1] - AD_LEAD)
         log("reklama %d:%02d–%d:%02d — preskakujem"
             % (b[0] // 60, b[0] % 60, b[1] // 60, b[1] % 60))
-        player.seekTime(max(b[0], b[1] - AD_LEAD))
+        player.seekTime(target)
+        self.verify = (b, target, now + AD_VERIFY)
+        self.steady = 0
         xbmcgui.Dialog().notification(
             "O2 TV", "Reklama preskočená (%s)" % ("%d s" % (b[1] - b[0]) if b[1] - b[0] < 120
                                                    else "%d min" % round((b[1] - b[0]) / 60.0)),
@@ -519,7 +553,19 @@ class AdSkip(threading.Thread):
             log("preskakovanie reklám: manifest sa nenačítal (%s)" % e, True)
             return
         self.dynamic = ads.is_dynamic(text)
-        found = ads.parse_breaks(text)
+        if not self.dynamic:
+            found = ads.parse_breaks(text)
+        else:
+            # bezi program: casy znaciek su absolutne, poloha 0 je prvy segment.
+            # Origin sa vezme z prveho nacitania (ako ho videl prehravac); blok,
+            # ktory este nedobehol, sa preskocit neda
+            if self.origin is None:
+                self.origin = ads.timeline_origin(text)
+            found = []
+            if self.origin is not None:
+                limit = time.time() - self.origin - AD_LIVE_GAP
+                found = [b for b in ads.parse_breaks(text, self.origin)
+                         if b[1] <= limit]
         if found != self.breaks:
             log("reklamné bloky (%s): %s" % (
                 "program ešte beží" if self.dynamic else "odvysielaný",

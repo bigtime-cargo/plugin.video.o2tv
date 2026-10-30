@@ -13,8 +13,11 @@ immediate). Cue-out sa opakuje kazdych ~10-20 s s klesajucim zvyskom, vsetky
 maju rovnake event id. Cas udalosti (presentationTime - presentationTimeOffset)
 je sekundy od zaciatku programu, teda rovnaka poloha, akú hlási prehravac.
 
-Ziveho okraja sa to netyka: manifest programu, ktory este bezi (dynamic),
-EventStream zatial nema (udalosti idu len inband v segmentoch)."""
+Program, ktory este bezi (dynamic), ma EventStream tiez (overene 30. 10. 2026),
+ale bez presentationTimeOffset: casy udalosti su absolutne (sekundy od roku
+1970), rovnako ako casova os segmentov. Poloha prehravaca 0 je zaciatok
+casovej osi, teda cas prveho segmentu (timeline_origin) - ten sa odpocita.
+Cisto zivy okraj (timeshift ~1 min) sa preskocit nedá."""
 import base64
 import re
 import xml.etree.ElementTree as ET
@@ -53,9 +56,34 @@ def parse_splice_insert(data):
     return evid, oon, dur
 
 
-def parse_breaks(mpd_text):
+def timeline_origin(mpd_text):
+    """Cas (s) prveho segmentu casovej osi bezieho programu - tam je poloha 0
+    prehravaca s play_timeshift_buffer. None, ked sa neda urcit."""
+    try:
+        root = ET.fromstring(mpd_text.encode("utf-8") if isinstance(mpd_text, str)
+                             else mpd_text)
+    except ET.ParseError:
+        return None
+    sets = root.findall(".//m:AdaptationSet", NS)
+    sets.sort(key=lambda a: a.get("contentType") != "video")   # video ako prve
+    for a in sets:
+        st = a.find("m:SegmentTemplate", NS)
+        s = st.find("m:SegmentTimeline/m:S", NS) if st is not None else None
+        if s is None or s.get("t") is None:
+            continue
+        try:
+            ts = int(st.get("timescale") or 1)
+            pto = int(st.get("presentationTimeOffset") or 0)
+            return (int(s.get("t")) - pto) / float(ts)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_breaks(mpd_text, origin=None):
     """Zoznam (start_s, end_s) reklamnych blokov podla zaciatku. Prazdny, ked
-    manifest EventStream nema alebo sa neda precitat."""
+    manifest EventStream nema alebo sa neda precitat. `origin` = timeline_origin
+    bezieho programu; casy udalosti, ktore su absolutne, sa o neho posunu."""
     try:
         root = ET.fromstring(mpd_text.encode("utf-8") if isinstance(mpd_text, str)
                              else mpd_text)
@@ -73,6 +101,8 @@ def parse_breaks(mpd_text):
         for ev in es.iterfind("m:Event", NS):
             try:
                 t = (int(ev.get("presentationTime") or 0) - pto) / float(ts)
+                if origin is not None and t > origin - 3600:    # absolutny cas
+                    t -= origin
                 b = ev.find(".//s:Binary", NS)
                 parsed = parse_splice_insert(base64.b64decode(b.text.strip()))
             except (ValueError, AttributeError, TypeError):

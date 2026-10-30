@@ -421,9 +421,13 @@ Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
 `python3 -m unittest tools.test_ads`.
 
 - Poloha = `presentationTime − presentationTimeOffset` (s od začiatku programu).
-- Bežiaci program (dynamic) EventStream v MPD nemá, značky idú len inband
-  (emsg v segmentoch) — nepodporované; služba manifest znova číta každých 30 s,
-  takže ak sa tam raz objavia, zaberie to samo.
+- Bežiaci program (dynamic) EventStream v MPD MÁ (opravené v 1.3.4; predtým omylom
+  napísané opak), ale bez `presentationTimeOffset`: časy sú absolútne (s od 1970),
+  rovnako ako `SegmentTimeline`. Poloha 0 prehrávača (`play_timeshift_buffer`) =
+  `S@t / timescale` prvého segmentu (`ads.timeline_origin`), od toho sa časy
+  odpočítajú. Origin sa berie z prvého načítania (ako ho videl ISA). Blok, ktorý
+  ešte nedobehol (koniec novší než `čas − origin − AD_LIVE_GAP`), sa nepreskakuje.
+  Služba číta manifest každých 30 s, hotové bloky pribúdajú.
 - V logu Kodi: `[o2tv.service] reklamné bloky (...)` a `reklama a:bb–c:dd — preskakujem`.
 - JOJ (1.3.1): každé opakovanie cue-out má iné event id, takže bloky sa zhlukujú
   podľa času (opakovanie leží pred koncom bloku). Za prvým cue-in pokračuje séria
@@ -435,3 +439,12 @@ Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
   posúva na prvý z reťazca cue-in s rozostupmi ≤ `EXT_GAP`, nie pred koniec predošlého bloku.
 - 1.3.3: seek po bloku mieri `AD_LEAD` = 1,5 s pred cue-in (cue-in prichádza tesne po
   začiatku programu, používateľ chcel začiatok scény o 1–2 s skôr), nie pred `b[0]`.
+- 1.3.4 (30. 10. 2026), dve poznámky používateľa:
+  (1) program, ktorý ešte beží, preskakoval reklamy nanič — pozri vyššie (absolútne časy);
+  overené na živom manifeste Markízy: blok 12:31–22:44 sedí s časom cue-out 21:42:27 UTC
+  pri začiatku programu 21:30 UTC.
+  (2) po `Player.Open` ďalšieho bloku z archívu sa reklama na jeho začiatku nepreskočila:
+  skok prišiel 18:44:21,7, demuxer sa otvoril 18:44:22,2, `seekTime` zapadol do
+  rozbiehajúceho prehrávača a blok bol už označený ako preskočený. Teraz `AdSkip`
+  čaká, kým `Player.Playing`, nie je `Caching` a poloha plynule rastie `AD_STEADY`
+  tikov, a po skoku za `AD_VERIFY` s skontroluje polohu a zopakuje (`AD_TRIES` = 3).

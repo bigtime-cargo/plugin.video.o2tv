@@ -146,6 +146,50 @@ class JojSeries(unittest.TestCase):
         self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 131.0)])
 
 
+class RunningProgram(unittest.TestCase):
+    """Program, ktory este bezi (dynamic): EventStream bez presentationTimeOffset,
+    casy udalosti su absolutne ako casova os segmentov (overene 30. 10. 2026,
+    Markiza: prvy segment 1793395796,2, cue-out o 12:31 od zaciatku programu)."""
+
+    T0 = 1793395796.2
+
+    def dyn(self, events, seg_t=None):
+        m = mpd([(self.T0 + sec, d, b64) for sec, d, b64 in events], "dynamic")
+        seg_t = int(self.T0 * 48000) if seg_t is None else seg_t
+        tpl = ('<AdaptationSet contentType="%s"><SegmentTemplate timescale="48000">'
+               '<SegmentTimeline><S t="%d" d="92160" r="9"/></SegmentTimeline>'
+               '</SegmentTemplate></AdaptationSet>')
+        return m.replace("</Period>", (tpl % ("audio", seg_t + 7)) + (tpl % ("video", seg_t))
+                         + "</Period>")
+
+    def test_origin_is_first_segment_of_video(self):
+        self.assertAlmostEqual(ads.timeline_origin(self.dyn([])), self.T0, 3)
+
+    def test_origin_missing(self):
+        self.assertIsNone(ads.timeline_origin(mpd([])))
+        self.assertIsNone(ads.timeline_origin("<nie xml"))
+
+    def test_absolute_times_become_positions(self):
+        m = self.dyn([(750.8, 25.4, OUT_A), (760.8, 15.4, OUT_B), (781.0, None, IN_A)])
+        o = ads.timeline_origin(m)
+        (s, e), = ads.parse_breaks(m, o)
+        self.assertAlmostEqual(s, 750.8, 1)
+        self.assertAlmostEqual(e, 781.0, 1)
+
+    def test_without_origin_times_stay_absolute(self):
+        m = self.dyn([(750.8, 25.4, OUT_A)])
+        self.assertGreater(ads.parse_breaks(m)[0][0], 1e9)
+
+    def test_break_started_before_the_buffer(self):
+        m = self.dyn([(-168.0, 25.4, OUT_A), (-100.0, None, IN_A)])
+        (s, e), = ads.parse_breaks(m, ads.timeline_origin(m))
+        self.assertAlmostEqual(s, -168.0, 1)
+
+    def test_static_ignores_origin_argument_when_relative(self):
+        m = mpd([(439.3, 25.4, OUT_A), (465.8, None, IN_A)])
+        self.assertEqual(ads.parse_breaks(m, self.T0), [(439.3, 465.8)])
+
+
 class BreakAt(unittest.TestCase):
     B = [(100.0, 200.0), (400.0, 500.0)]
 
