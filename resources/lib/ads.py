@@ -1,0 +1,111 @@
+# -*- coding: utf-8 -*-
+"""Reklamne bloky z manifestu: SCTE-35 EventStream v MPD od Broadpeak CDN.
+
+Hotovy (static) archivny program ma v Period <EventStream
+schemeIdUri="urn:scte:scte35:2014:xml+bin"> s udalostami splice_insert:
+cue-out (out_of_network=1, break_duration) a cue-in (out_of_network=0,
+immediate). Cue-out sa opakuje kazdych ~10-20 s s klesajucim zvyskom, vsetky
+maju rovnake event id. Cas udalosti (presentationTime - presentationTimeOffset)
+je sekundy od zaciatku programu, teda rovnaka poloha, akú hlási prehravac.
+
+Ziveho okraja sa to netyka: manifest programu, ktory este bezi (dynamic),
+EventStream zatial nema (udalosti idu len inband v segmentoch)."""
+import base64
+import re
+import xml.etree.ElementTree as ET
+
+NS = {"m": "urn:mpeg:dash:schema:mpd:2011",
+      "s": "http://www.scte.org/schemas/35/2016"}
+SCHEME = "urn:scte:scte35:2014:xml+bin"
+MIN_BREAK = 5.0     # kratsie bloky nestoja za seek
+
+
+def parse_splice_insert(data):
+    """(event_id, out_of_network, break_duration_s | None) zo splice_info_section,
+    alebo None, ked to nie je splice_insert. Nic z toho nesmie zhodit sluzbu."""
+    if len(data) < 20 or data[0] != 0xFC or data[13] != 0x05:
+        return None
+    evid = int.from_bytes(data[14:18], "big")
+    if data[18] & 0x80:                 # splice_event_cancel_indicator
+        return None
+    flags = data[19]
+    oon = bool(flags & 0x80)
+    program = bool(flags & 0x40)
+    has_dur = bool(flags & 0x20)
+    immediate = bool(flags & 0x10)
+    p = 20
+    if program and not immediate:       # splice_time()
+        p += 5 if data[p] & 0x80 else 1
+    elif not program:
+        return None                     # component splice - nepouzivane
+    dur = None
+    if has_dur:
+        if p + 5 > len(data):
+            return None
+        dur = (int.from_bytes(data[p:p + 5], "big") & 0x1FFFFFFFF) / 90000.0
+    return evid, oon, dur
+
+
+def parse_breaks(mpd_text):
+    """Zoznam (start_s, end_s) reklamnych blokov podla zaciatku. Prazdny, ked
+    manifest EventStream nema alebo sa neda precitat."""
+    try:
+        root = ET.fromstring(mpd_text.encode("utf-8") if isinstance(mpd_text, str)
+                             else mpd_text)
+    except ET.ParseError:
+        return []
+    events = []     # (cas_s, evid, oon, trvanie)
+    for es in root.iterfind(".//m:Period/m:EventStream", NS):
+        if es.get("schemeIdUri") != SCHEME:
+            continue
+        try:
+            ts = int(es.get("timescale") or 1)
+            pto = int(es.get("presentationTimeOffset") or 0)
+        except ValueError:
+            continue
+        for ev in es.iterfind("m:Event", NS):
+            try:
+                t = (int(ev.get("presentationTime") or 0) - pto) / float(ts)
+                b = ev.find(".//s:Binary", NS)
+                parsed = parse_splice_insert(base64.b64decode(b.text.strip()))
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if parsed:
+                evid, oon, dur = parsed
+                if dur is None and ev.get("duration"):
+                    dur = int(ev.get("duration")) / float(ts)
+                events.append((t, evid, oon, dur))
+    events.sort()
+    ins = [e for e in events if not e[2]]           # cue-in
+    breaks = {}
+    for t, evid, oon, dur in events:
+        if not oon or not dur:
+            continue
+        b = breaks.setdefault(evid, [t, t + dur])
+        b[0] = min(b[0], t)
+        b[1] = max(b[1], t + dur)
+    out = []
+    for start, end in breaks.values():
+        # skutocny koniec je cue-in; trvanie z cue-out byva o ~1 s kratsie
+        back = [t for t, _e, _o, _d in ins if start < t <= end + 10]
+        if back:
+            end = min(back)
+        if end - start >= MIN_BREAK:
+            out.append((start, end))
+    return sorted(out)
+
+
+def is_dynamic(mpd_text):
+    """Program este bezi (live manifest) - reklamy v nom pribudaju."""
+    if isinstance(mpd_text, bytes):
+        mpd_text = mpd_text.decode("utf-8", "replace")
+    m = re.search(r"<MPD\b[^>]*\btype=\"(\w+)\"", mpd_text)
+    return bool(m and m.group(1) == "dynamic")
+
+
+def break_at(breaks, pos, skipped=()):
+    """Blok, v ktorom je poloha `pos` a ktory sme este nepreskocili."""
+    for b in breaks:
+        if b[0] - 0.3 <= pos < b[1] - 1.0 and b not in skipped:
+            return b
+    return None

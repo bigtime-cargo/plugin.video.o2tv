@@ -410,3 +410,18 @@ kópiou session.json — 3. 9. 2026 dostala vlastné UDID.
 - Necommitovať session.json, o2_auth.json, tokeny ani UDID.
 - Nemazať ~/o2tv/o2tv_keycloak_login.py — treba ho na každé prihlásenie.
 - Cron a o2tv-doctor.service sú vypnuté zámerne (rotovali by token).
+
+## Preskakovanie reklám (1.3.0, 30. 10. 2026)
+
+Manifest odvysielaného programu (static) nesie `EventStream` so SCTE-35
+`splice_insert` (cue-out s `break_duration`, opakovaný každých ~10–20 s, a
+cue-in). `resources/lib/ads.py` z nich skladá bloky, `AdSkip` v `service.py`
+pri vstupe do bloku spraví `seekTime` na jeho koniec (každý blok najviac raz).
+Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
+`python3 -m unittest tools.test_ads`.
+
+- Poloha = `presentationTime − presentationTimeOffset` (s od začiatku programu).
+- Bežiaci program (dynamic) EventStream v MPD nemá, značky idú len inband
+  (emsg v segmentoch) — nepodporované; služba manifest znova číta každých 30 s,
+  takže ak sa tam raz objavia, zaberie to samo.
+- V logu Kodi: `[o2tv.service] reklamné bloky (...)` a `reklama a:bb–c:dd — preskakujem`.

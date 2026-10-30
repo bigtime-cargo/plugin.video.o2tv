@@ -9,6 +9,7 @@ sys.path.insert(0, xbmcvfs.translatePath(
     os.path.join(ADDON.getAddonInfo("path"), "resources", "lib")))
 from api import O2API, O2Error, UA   # noqa: E402
 from export import export_all, Aborted   # noqa: E402
+import ads   # noqa: E402
 
 
 class Store:
@@ -448,6 +449,84 @@ class EndWatch(threading.Thread):
         return None
 
 
+# ---------- preskakovanie reklam ----------
+# Manifest odvysielaneho programu nesie SCTE-35 znacky reklamnych blokov
+# (resources/lib/ads.py). inputstream.adaptive ich Kodi neodovzdava, preto
+# manifest nacitame sami a pri vstupe do bloku preskocime na jeho koniec.
+# Kazdy blok najviac raz - kto sa vrati spat, mieri tam sam.
+ADS_RELOAD = 30     # s, ako casto sa znova cita manifest bezieho programu
+
+
+class AdSkip(threading.Thread):
+
+    def __init__(self, monitor):
+        threading.Thread.__init__(self, daemon=True)
+        self.monitor = monitor
+        self.reset("")
+
+    def reset(self, url):
+        self.url = url
+        self.breaks = []
+        self.skipped = set()
+        self.fetched = 0
+        self.dynamic = False
+
+    def run(self):
+        while not self.monitor.abortRequested():
+            if self.monitor.waitForAbort(1):
+                break
+            try:
+                self.tick()
+            except Exception as e:
+                log("preskakovanie reklám: %s" % e, True)
+
+    def tick(self):
+        url = xbmcgui.Window(10000).getProperty(KEEPALIVE_PROP)
+        if (ADDON.getSetting("skip_ads") != "true" or not url
+                or not xbmc.getCondVisibility("Player.HasVideo")
+                or not KeepAlive.ours(url)):
+            if self.url:
+                self.reset("")
+            return
+        now = time.time()
+        if url != self.url:
+            self.reset(url)
+        if not self.fetched or (self.dynamic and now - self.fetched > ADS_RELOAD):
+            self.load(url)
+        if not self.breaks or xbmc.getCondVisibility("Player.Seeking"):
+            return
+        player = xbmc.Player()
+        b = ads.break_at(self.breaks, player.getTime(), self.skipped)
+        if not b:
+            return
+        self.skipped.add(b)
+        log("reklama %d:%02d–%d:%02d — preskakujem"
+            % (b[0] // 60, b[0] % 60, b[1] // 60, b[1] % 60))
+        player.seekTime(b[1])
+        xbmcgui.Dialog().notification(
+            "O2 TV", "Reklama preskočená (%s)" % ("%d s" % (b[1] - b[0]) if b[1] - b[0] < 120
+                                                   else "%d min" % round((b[1] - b[0]) / 60.0)),
+            xbmcgui.NOTIFICATION_INFO, 2000, False)
+
+    def load(self, url):
+        self.fetched = time.time()
+        try:
+            req = urllib.request.Request(url, headers={"user-agent": UA})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                text = r.read().decode("utf-8", "replace")
+        except Exception as e:
+            log("preskakovanie reklám: manifest sa nenačítal (%s)" % e, True)
+            return
+        self.dynamic = ads.is_dynamic(text)
+        found = ads.parse_breaks(text)
+        if found != self.breaks:
+            log("reklamné bloky (%s): %s" % (
+                "program ešte beží" if self.dynamic else "odvysielaný",
+                ", ".join("%d:%02d–%d:%02d" % (a // 60, a % 60, b // 60, b % 60)
+                          for a, b in found) or "žiadne"))
+        self.breaks = found
+
+
 # ---------- automaticke prihlasenie cez SSO cookie ----------
 # Refresh token umiera so svojou KS (~7 dni, 500017). Ked je v profile
 # sso.json (import cez nastavenia), doplnok si kod zariadenia schvali sam
@@ -592,6 +671,7 @@ def main():
     auto = AutoLogin(api, os.path.join(profile, SSO_FILE), monitor)
     KeepAlive(monitor).start()
     EndWatch(monitor).start()
+    AdSkip(monitor).start()
     last_export = 0
     last_warn = 0
     first = True

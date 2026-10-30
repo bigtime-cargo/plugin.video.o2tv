@@ -16,6 +16,7 @@
     <setting id="client_tag" type="text" label="clientTag" default="9.66.1-PC"/>
     <setting id="auto_clienttag" type="bool" label="Aktualizovať clientTag automaticky" default="true"/>
     <setting id="max_bitrate" type="labelenum" label="Max. kvalita" values="Auto|1080p|720p|576p" default="Auto"/>
+    <setting id="skip_ads" type="bool" label="Preskakovať reklamy v archíve (značky SCTE-35)" default="false"/>
   </category>
   <category label="EPG">
     <setting id="epg_days_back" type="slider" label="Dní dozadu (archív)" default="7" range="1,1,7" option="int"/>
