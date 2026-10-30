@@ -430,3 +430,6 @@ Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
   ďalších cue-in (rozostupy 4–40 s, `EXT_GAP` 45 s, najviac `EXT_MAX` 600 s) a reklama
   trvá do jej posledného člena: cue-out 16:11–19:24, cue-in 19:25 … 24:39,6, reklama
   skončila v 24:40 (potvrdil používateľ 30. 10. 2026). Markíza má jeden cue-in.
+- JOJ (1.3.2): reklama začína už pri cue-in tesne pred cue-out (15:30,4 a 15:36,5 pred
+  cue-out 16:11,5; reklama bežala 15:31–24:40, potvrdil používateľ). Začiatok bloku sa
+  posúva na prvý z reťazca cue-in s rozostupmi ≤ `EXT_GAP`, nie pred koniec predošlého bloku.

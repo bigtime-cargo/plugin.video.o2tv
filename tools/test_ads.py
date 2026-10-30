@@ -104,13 +104,17 @@ class JojSeries(unittest.TestCase):
     pokracuje seria dalsich cue-in - reklama trva do jej posledneho clena."""
 
     def joj(self):
-        ev = [(971.5, 194.5, splice(1, True, 194.5)),
+        ev = [(500.0, None, splice(40, False)),                   # dlho pred blokom
+              (930.4, None, splice(41, False)),
+              (936.5, None, splice(42, False)),
+              (971.5, 194.5, splice(1, True, 194.5)),
               (981.4, 184.6, splice(2, True, 184.6)),
               (1136.1, 29.9, splice(3, True, 29.9))]
         for i, t in enumerate((1164.9, 1184.8, 1214.8, 1244.8, 1274.8, 1299.6, 1339.4,
                             1374.1, 1404.1, 1434.5, 1462.6, 1479.6)):
             ev.append((t, None, splice(10 + i, False)))
         ev += [(2436.6, None, splice(30, False)),            # po 957 s ticha
+               (2442.6, None, splice(33, False)),
                (2462.6, 197.0, splice(31, True, 197.0)),
                (2640.0, None, splice(32, False))]
         return mpd(ev)
@@ -118,10 +122,10 @@ class JojSeries(unittest.TestCase):
     def test_block_ends_with_last_cue_in_of_series(self):
         got = ads.parse_breaks(self.joj())
         self.assertEqual(len(got), 2)
-        self.assertEqual(got[0], (971.5, 1479.6))
+        self.assertEqual(got[0], (930.4, 1479.6))      # od prveho cue-in pred cue-out
 
     def test_series_stops_at_next_cue_out(self):
-        self.assertEqual(ads.parse_breaks(self.joj())[1][0], 2462.6)
+        self.assertEqual(ads.parse_breaks(self.joj())[1][0], 2436.6)
         self.assertEqual(ads.parse_breaks(self.joj())[1][1], 2640.0)
 
     def test_series_is_capped(self):
@@ -129,6 +133,12 @@ class JojSeries(unittest.TestCase):
         ev += [(130.0 + 30 * i, None, splice(2 + i, False)) for i in range(60)]
         (s, e), = ads.parse_breaks(mpd(ev))
         self.assertLessEqual(e - 130.0, ads.EXT_MAX)
+
+    def test_start_does_not_cross_previous_block(self):
+        # cue-in 8:22 konci prvy blok a je len 5 s pred druhym cue-out
+        ev = [(473.0, 29.0, splice(1, True, 29.0)), (502.0, None, splice(2, False)),
+              (507.7, 29.0, splice(3, True, 29.0)), (536.4, None, splice(4, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(473.0, 502.0), (507.7, 536.4)])
 
     def test_single_cue_in_does_not_extend(self):
         ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),

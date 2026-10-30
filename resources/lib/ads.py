@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Reklamne bloky z manifestu: SCTE-35 EventStream v MPD od Broadpeak CDN.
 
-JOJ: koniec bloku nie je prvy cue-in, ale posledny z serie cue-in za nim
-(overene 30. 10. 2026: cue-out 16:11-19:24, cue-in 19:25 ... 24:39,6, reklama
-skoncila v 24:40).
+JOJ: koniec bloku nie je prvy cue-in, ale posledny z serie cue-in za nim,
+a zaciatok je uz prvy z cue-in tesne pred cue-out (overene 30. 10. 2026:
+cue-in 15:30,4 a 15:36,5, cue-out 16:11-19:24, cue-in 19:25 ... 24:39,6;
+reklama bezala 15:31 - 24:40).
 
 Hotovy (static) archivny program ma v Period <EventStream
 schemeIdUri="urn:scte:scte35:2014:xml+bin"> s udalostami splice_insert:
@@ -113,7 +114,19 @@ def parse_breaks(mpd_text):
             end = last
         if end - start >= MIN_BREAK:
             out.append((start, end))
-    return sorted(out)
+    out.sort()
+    # JOJ: reklama zacina uz pri cue-in tesne pred cue-out (15:30,4 a 15:36,5
+    # pred cue-out 16:11,5; reklama sa v obraze zacala v 15:31) - posun zaciatok
+    # na prvy z nich, ale nie pred koniec predosleho bloku
+    for i, (start, end) in enumerate(out):
+        limit = out[i - 1][1] if i else -1.0
+        first = start
+        for t in reversed([t for t in ins if limit < t < start]):
+            if first - t > EXT_GAP or start - t > EXT_MAX:
+                break
+            first = t
+        out[i] = (first, end)
+    return out
 
 
 def is_dynamic(mpd_text):
