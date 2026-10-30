@@ -433,3 +433,5 @@ Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
 - JOJ (1.3.2): reklama začína už pri cue-in tesne pred cue-out (15:30,4 a 15:36,5 pred
   cue-out 16:11,5; reklama bežala 15:31–24:40, potvrdil používateľ). Začiatok bloku sa
   posúva na prvý z reťazca cue-in s rozostupmi ≤ `EXT_GAP`, nie pred koniec predošlého bloku.
+- 1.3.3: seek po bloku mieri `AD_LEAD` = 1,5 s pred cue-in (cue-in prichádza tesne po
+  začiatku programu, používateľ chcel začiatok scény o 1–2 s skôr), nie pred `b[0]`.

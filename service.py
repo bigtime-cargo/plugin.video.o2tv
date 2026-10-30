@@ -455,6 +455,7 @@ class EndWatch(threading.Thread):
 # manifest nacitame sami a pri vstupe do bloku preskocime na jeho koniec.
 # Kazdy blok najviac raz - kto sa vrati spat, mieri tam sam.
 ADS_RELOAD = 30     # s, ako casto sa znova cita manifest bezieho programu
+AD_LEAD = 1.5       # s, o kolko skor pred koncom bloku sa spusti program (cue-in prichadza tesne po zaciatku programu)
 
 
 class AdSkip(threading.Thread):
@@ -502,7 +503,7 @@ class AdSkip(threading.Thread):
         self.skipped.add(b)
         log("reklama %d:%02d–%d:%02d — preskakujem"
             % (b[0] // 60, b[0] % 60, b[1] // 60, b[1] % 60))
-        player.seekTime(b[1])
+        player.seekTime(max(b[0], b[1] - AD_LEAD))
         xbmcgui.Dialog().notification(
             "O2 TV", "Reklama preskočená (%s)" % ("%d s" % (b[1] - b[0]) if b[1] - b[0] < 120
                                                    else "%d min" % round((b[1] - b[0]) / 60.0)),
