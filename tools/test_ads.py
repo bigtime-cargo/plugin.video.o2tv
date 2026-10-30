@@ -5,7 +5,7 @@
 
 Binarne udalosti su skutocne, z archivneho manifestu Markizy (30. 10. 2026).
 """
-import os, sys, unittest
+import base64, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "resources", "lib"))
@@ -33,6 +33,18 @@ def mpd(events, typ="static", pto=0):
             '<Period id="1"><EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" '
             'value="2500" timescale="%d" presentationTimeOffset="%d">%s</EventStream>'
             '</Period></MPD>' % (typ, T, pto, ev))
+
+
+def splice(evid, oon, dur=None):
+    """Zostavi splice_insert (CRC sa nekontroluje). Rovnaka kostra ako v O2."""
+    flags = (0x80 if oon else 0) | 0x40 | (0x20 if dur else 0) | (0 if dur else 0x10) | 0x0F
+    body = evid.to_bytes(4, "big") + b"\x00" + bytes([flags])
+    if dur:
+        body += (0xFE << 32 | 1).to_bytes(5, "big")                 # splice_time
+        body += ((1 << 39) | (0x3F << 33) | int(dur * 90000)).to_bytes(5, "big")
+    body += b"\x00\x00\x00\x00\x00"
+    d = b"\xfc\x30\x00\x00" + b"\x00" * 5 + b"\x00" + b"\xff\xf0\x00" + b"\x05" + body
+    return base64.b64encode(d + b"\x00\x00\x00\x00").decode()
 
 
 class ParseSplice(unittest.TestCase):
@@ -85,6 +97,43 @@ class ParseBreaks(unittest.TestCase):
         self.assertTrue(ads.is_dynamic(mpd([], "dynamic")))
         self.assertFalse(ads.is_dynamic(mpd([], "static")))
         self.assertFalse(ads.is_dynamic(b"nic"))
+
+
+class JojSeries(unittest.TestCase):
+    """JOJ: kazde opakovanie cue-out ma ine event id a za prvym cue-in
+    pokracuje seria dalsich cue-in - reklama trva do jej posledneho clena."""
+
+    def joj(self):
+        ev = [(971.5, 194.5, splice(1, True, 194.5)),
+              (981.4, 184.6, splice(2, True, 184.6)),
+              (1136.1, 29.9, splice(3, True, 29.9))]
+        for i, t in enumerate((1164.9, 1184.8, 1214.8, 1244.8, 1274.8, 1299.6, 1339.4,
+                            1374.1, 1404.1, 1434.5, 1462.6, 1479.6)):
+            ev.append((t, None, splice(10 + i, False)))
+        ev += [(2436.6, None, splice(30, False)),            # po 957 s ticha
+               (2462.6, 197.0, splice(31, True, 197.0)),
+               (2640.0, None, splice(32, False))]
+        return mpd(ev)
+
+    def test_block_ends_with_last_cue_in_of_series(self):
+        got = ads.parse_breaks(self.joj())
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0], (971.5, 1479.6))
+
+    def test_series_stops_at_next_cue_out(self):
+        self.assertEqual(ads.parse_breaks(self.joj())[1][0], 2462.6)
+        self.assertEqual(ads.parse_breaks(self.joj())[1][1], 2640.0)
+
+    def test_series_is_capped(self):
+        ev = [(100.0, 30.0, splice(1, True, 30.0))]
+        ev += [(130.0 + 30 * i, None, splice(2 + i, False)) for i in range(60)]
+        (s, e), = ads.parse_breaks(mpd(ev))
+        self.assertLessEqual(e - 130.0, ads.EXT_MAX)
+
+    def test_single_cue_in_does_not_extend(self):
+        ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),
+              (400.0, None, splice(3, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 131.0)])
 
 
 class BreakAt(unittest.TestCase):

@@ -425,3 +425,8 @@ Nastavenie `skip_ads` (Prehrávanie), predvolene **vypnuté**. Testy:
   (emsg v segmentoch) — nepodporované; služba manifest znova číta každých 30 s,
   takže ak sa tam raz objavia, zaberie to samo.
 - V logu Kodi: `[o2tv.service] reklamné bloky (...)` a `reklama a:bb–c:dd — preskakujem`.
+- JOJ (1.3.1): každé opakovanie cue-out má iné event id, takže bloky sa zhlukujú
+  podľa času (opakovanie leží pred koncom bloku). Za prvým cue-in pokračuje séria
+  ďalších cue-in (rozostupy 4–40 s, `EXT_GAP` 45 s, najviac `EXT_MAX` 600 s) a reklama
+  trvá do jej posledného člena: cue-out 16:11–19:24, cue-in 19:25 … 24:39,6, reklama
+  skončila v 24:40 (potvrdil používateľ 30. 10. 2026). Markíza má jeden cue-in.

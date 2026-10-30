@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """Reklamne bloky z manifestu: SCTE-35 EventStream v MPD od Broadpeak CDN.
 
+JOJ: koniec bloku nie je prvy cue-in, ale posledny z serie cue-in za nim
+(overene 30. 10. 2026: cue-out 16:11-19:24, cue-in 19:25 ... 24:39,6, reklama
+skoncila v 24:40).
+
 Hotovy (static) archivny program ma v Period <EventStream
 schemeIdUri="urn:scte:scte35:2014:xml+bin"> s udalostami splice_insert:
 cue-out (out_of_network=1, break_duration) a cue-in (out_of_network=0,
@@ -18,6 +22,8 @@ NS = {"m": "urn:mpeg:dash:schema:mpd:2011",
       "s": "http://www.scte.org/schemas/35/2016"}
 SCHEME = "urn:scte:scte35:2014:xml+bin"
 MIN_BREAK = 5.0     # kratsie bloky nestoja za seek
+EXT_GAP = 45.0      # najvacsi rozostup cue-in v serii za blokom (JOJ: 40 s)
+EXT_MAX = 600.0     # a najviac tolko za prvym cue-in (JOJ: 315 s)
 
 
 def parse_splice_insert(data):
@@ -76,20 +82,35 @@ def parse_breaks(mpd_text):
                     dur = int(ev.get("duration")) / float(ts)
                 events.append((t, evid, oon, dur))
     events.sort()
-    ins = [e for e in events if not e[2]]           # cue-in
-    breaks = {}
-    for t, evid, oon, dur in events:
-        if not oon or not dur:
+    outs = [e for e in events if e[2]]
+    ins = [e[0] for e in events if not e[2]]
+    # cue-out sa opakuje s klesajucim zvyskom, u JOJ aj s inym event id -
+    # zhluk sa preto ratat podla casu: opakovanie lezi pred koncom bloku
+    clusters = []       # [start, odhad konca]
+    for t, _evid, _oon, dur in outs:
+        if not dur:
             continue
-        b = breaks.setdefault(evid, [t, t + dur])
-        b[0] = min(b[0], t)
-        b[1] = max(b[1], t + dur)
+        if clusters and t < clusters[-1][1]:
+            clusters[-1][1] = max(clusters[-1][1], t + dur)
+        else:
+            clusters.append([t, t + dur])
     out = []
-    for start, end in breaks.values():
+    for start, est in clusters:
         # skutocny koniec je cue-in; trvanie z cue-out byva o ~1 s kratsie
-        back = [t for t, _e, _o, _d in ins if start < t <= end + 10]
+        back = [t for t in ins if start < t <= est + 10]
+        end = min(back) if back else est
         if back:
-            end = min(back)
+            # JOJ: po cue-in pokracuje seria dalsich cue-in (rozostupy 4-40 s)
+            # a reklama trva az do jej posledneho clena (24:40 pri cue-in 19:25)
+            nxt = min([t for t, _e, o, _d in events if o and t > end] or [1e12])
+            last = end
+            for t in ins:
+                if t <= last or t >= nxt:
+                    continue
+                if t - last > EXT_GAP or t - end > EXT_MAX:
+                    break
+                last = t
+            end = last
         if end - start >= MIN_BREAK:
             out.append((start, end))
     return sorted(out)
