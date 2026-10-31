@@ -26,7 +26,7 @@ NS = {"m": "urn:mpeg:dash:schema:mpd:2011",
       "s": "http://www.scte.org/schemas/35/2016"}
 SCHEME = "urn:scte:scte35:2014:xml+bin"
 MIN_BREAK = 5.0     # kratsie bloky nestoja za seek
-EXT_GAP = 45.0      # najvacsi rozostup cue-in v serii za blokom (JOJ: 40 s)
+EXT_GAP = 60.0      # najvacsi rozostup cue-in v serii za blokom (JOJ: 48 s)
 EXT_MAX = 600.0     # a najviac tolko za prvym cue-in (JOJ: 315 s)
 MERGE_GAP = 30.0    # bloky bližšie ako toto sú jedna reklama (JOJ: 21 s)
 

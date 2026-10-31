@@ -152,6 +152,14 @@ class JojSeries(unittest.TestCase):
               (200.0, 30.0, splice(3, True, 30.0)), (231.0, None, splice(4, False))]
         self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 131.0), (200.0, 231.0)])
 
+    def test_series_gap_of_48_s_does_not_cut_the_series(self):
+        # JOJ 31. 10. 2026: za blokom 54:59 ide cue-in 55:46,8 (rozostup 47,7 s),
+        # 56:16,7 a 56:32,4 - reklama (Noviny TV JOJ) trvala do posledneho
+        ev = [(100.0, 30.0, splice(1, True, 30.0)), (130.0, None, splice(2, False)),
+              (177.7, None, splice(3, False)), (207.6, None, splice(4, False)),
+              (223.2, None, splice(5, False)), (1000.0, None, splice(6, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 223.2)])
+
     def test_single_cue_in_does_not_extend(self):
         ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),
               (400.0, None, splice(3, False))]
