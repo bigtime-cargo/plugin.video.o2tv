@@ -28,6 +28,7 @@ SCHEME = "urn:scte:scte35:2014:xml+bin"
 MIN_BREAK = 5.0     # kratsie bloky nestoja za seek
 EXT_GAP = 45.0      # najvacsi rozostup cue-in v serii za blokom (JOJ: 40 s)
 EXT_MAX = 600.0     # a najviac tolko za prvym cue-in (JOJ: 315 s)
+MERGE_GAP = 30.0    # bloky bližšie ako toto sú jedna reklama (JOJ: 21 s)
 
 
 def parse_splice_insert(data):
@@ -156,7 +157,16 @@ def parse_breaks(mpd_text, origin=None):
                 break
             first = t
         out[i] = (first, end)
-    return out
+    # JOJ: pred velkym blokom ide 10 s cue-out, dva cue-in a 21 s dalej
+    # velky cue-out (46:31, 46:40, 46:46, 47:07). Tych 21 s je tiez reklama
+    # (31. 10. 2026: skok na 46:44 pristal v reklame) - bloky sa spoja
+    merged = []
+    for b in out:
+        if merged and b[0] - merged[-1][1] <= MERGE_GAP:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b[1]))
+        else:
+            merged.append(b)
+    return merged
 
 
 def is_dynamic(mpd_text):

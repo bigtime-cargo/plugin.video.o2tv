@@ -138,7 +138,19 @@ class JojSeries(unittest.TestCase):
         # cue-in 8:22 konci prvy blok a je len 5 s pred druhym cue-out
         ev = [(473.0, 29.0, splice(1, True, 29.0)), (502.0, None, splice(2, False)),
               (507.7, 29.0, splice(3, True, 29.0)), (536.4, None, splice(4, False))]
-        self.assertEqual(ads.parse_breaks(mpd(ev)), [(473.0, 502.0), (507.7, 536.4)])
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(473.0, 536.4)])    # 5,7 s medzera = jedna reklama
+
+    def test_joj_short_block_before_big_one_is_merged(self):
+        # skutocne casy z JOJ 31. 10. 2026 (46:31, 46:40, 46:46, 47:07)
+        ev = [(2791.44, 9.92, splice(1, True, 9.92)), (2800.24, None, splice(2, False)),
+              (2806.2, None, splice(3, False)),
+              (2827.72, 471.4, splice(4, True, 471.4)), (3299.12, None, splice(6, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(2791.44, 3299.12)])
+
+    def test_far_blocks_stay_separate(self):
+        ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),
+              (200.0, 30.0, splice(3, True, 30.0)), (231.0, None, splice(4, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 131.0), (200.0, 231.0)])
 
     def test_single_cue_in_does_not_extend(self):
         ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),
