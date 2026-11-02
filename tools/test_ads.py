@@ -160,6 +160,16 @@ class JojSeries(unittest.TestCase):
               (223.2, None, splice(5, False)), (1000.0, None, splice(6, False))]
         self.assertEqual(ads.parse_breaks(mpd(ev)), [(100.0, 223.2)])
 
+    def test_series_gap_of_60_s_does_not_cut_the_series(self):
+        # JOJ 2. 11. 2026: cue-out 42:30, cue-in 45:33,8, dalsi az 46:33,84
+        # (rozostup 60,04 s) a seria pokracovala do 50:43,4 - reklama trvala tam
+        ev = [(2550.4, 184.5, splice(1, True, 184.5)), (2733.8, None, splice(2, False)),
+              (2793.84, None, splice(3, False)), (2803.8, None, splice(4, False)),
+              (2823.72, None, splice(5, False)), (2883.6, None, splice(6, False)),
+              (2955.6, None, splice(8, False)), (3043.36, None, splice(9, False)),
+              (3565.2, None, splice(7, False))]
+        self.assertEqual(ads.parse_breaks(mpd(ev)), [(2550.4, 3043.36)])
+
     def test_single_cue_in_does_not_extend(self):
         ev = [(100.0, 30.0, splice(1, True, 30.0)), (131.0, None, splice(2, False)),
               (400.0, None, splice(3, False))]
